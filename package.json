@@ -3,9 +3,24 @@
   "private": true,
   "version": "0.1.17",
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:sidecar": "npm --prefix agent-sidecar run typecheck",
+    "test:sidecar": "npm --prefix agent-sidecar run test",
+    "pretest:rust": "node scripts/fetch-sidecar-node-runtime.mjs && node scripts/ensure-sidecar-resources.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "fmt:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "prelint:rust": "node scripts/fetch-sidecar-node-runtime.mjs && node scripts/ensure-sidecar-resources.mjs",
+    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "verify": "npm run typecheck:test && npm run test && npm run build && npm run typecheck:sidecar && npm run test:sidecar && npm run test:rust",
     "theme:check": "node scripts/check-theme-usage.mjs",
     "icons:generate": "tauri icon public/rusty-dark.png && node scripts/prune-mobile-icons.mjs",
     "build:sidecar": "npm --prefix agent-sidecar run build && node scripts/prepare-sidecar-runtime.mjs",
@@ -37,7 +52,9 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "jsdom": "^30.0.1",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.11"
   }
 }

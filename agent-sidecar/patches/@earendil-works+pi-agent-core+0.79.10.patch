@@ -1,0 +1,18 @@
+diff --git a/node_modules/@earendil-works/pi-agent-core/dist/agent.js b/node_modules/@earendil-works/pi-agent-core/dist/agent.js
+index 15ea643..3d8ba1a 100644
+--- a/node_modules/@earendil-works/pi-agent-core/dist/agent.js
++++ b/node_modules/@earendil-works/pi-agent-core/dist/agent.js
+@@ -241,7 +241,12 @@ export class Agent {
+                 await this.runPromptMessages(queuedFollowUps);
+                 return;
+             }
+-            throw new Error("Cannot continue from message role: assistant");
++            // Nothing queued to continue with — the assistant's last turn is already
++            // a complete, valid stopping point. Treat as a normal finish instead of
++            // throwing, since callers (e.g. AgentSession._runAgentPrompt) call
++            // continue() speculatively whenever hasQueuedMessages() was true at check
++            // time, which can race with the queue being drained elsewhere.
++            return;
+         }
+         await this.runContinuation();
+     }

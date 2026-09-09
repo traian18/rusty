@@ -1268,3 +1268,8 @@ fn scan_git_subdirs(dir: &Path, results: &mut Vec<String>, depth: usize) {
         }
     }
 }
+
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+mod tests;

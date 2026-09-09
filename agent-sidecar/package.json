@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "PORT=4001 ../src-tauri/bin/node-aarch64-apple-darwin ./node_modules/ts-node/dist/bin.js src/server.ts",
     "build": "npm run typecheck && ../src-tauri/bin/node-aarch64-apple-darwin ./node_modules/tsup/dist/cli-default.js src/server.ts --format cjs,esm --dts",
-    "typecheck": "../src-tauri/bin/node-aarch64-apple-darwin ./node_modules/typescript/bin/tsc --noEmit",
-    "test:llm": "../src-tauri/bin/node-aarch64-apple-darwin --test -r ./node_modules/ts-node/register src/services/llmProviders.test.ts src/services/llmRuntime.test.ts src/services/copilotService.test.ts src/services/codexService.test.ts src/services/providerQuota.test.ts",
-    "test:architecture": "../src-tauri/bin/node-aarch64-apple-darwin --test -r ./node_modules/ts-node/register src/services/websocket.test.ts src/services/agentProtocol.test.ts src/services/eventPersistence.test.ts src/services/delegationManager.test.ts src/capabilities/reconciliateGraph.test.ts",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "test": "node --test -r ./node_modules/ts-node/register \"src/**/*.test.ts\"",
+    "test:llm": "node --test -r ./node_modules/ts-node/register src/services/llmProviders.test.ts src/services/llmRuntime.test.ts src/services/copilotService.test.ts src/services/codexService.test.ts src/services/providerQuota.test.ts",
+    "test:architecture": "node --test -r ./node_modules/ts-node/register src/services/websocket.test.ts src/services/agentProtocol.test.ts src/services/eventPersistence.test.ts src/services/delegationManager.test.ts src/capabilities/reconciliateGraph.test.ts",
     "start": "../src-tauri/bin/node-aarch64-apple-darwin dist/server.js",
     "node:version": "../src-tauri/bin/node-aarch64-apple-darwin --version",
     "postinstall": "rm -rf node_modules/@earendil-works/pi-coding-agent/node_modules/undici && patch-package"

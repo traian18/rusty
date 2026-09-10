@@ -18,3 +18,5 @@ export { Callout } from "./Callout/Callout";
 export type { CalloutProps, CalloutVariant } from "./Callout/Callout";
 export { TokenBadge } from "./TokenBadge/TokenBadge";
 export type { TokenBadgeProps, TokenUsageLike } from "./TokenBadge/TokenBadge";
+export { Tooltip } from "./Tooltip/Tooltip";
+export type { TooltipProps, TooltipPlacement } from "./Tooltip/Tooltip";

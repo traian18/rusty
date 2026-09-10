@@ -1,0 +1,67 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.bubble {
+  position: absolute;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-sunken);
+  color: var(--color-fg-strong);
+  padding: var(--space-1) var(--space-2);
+  white-space: nowrap;
+  box-shadow: var(--shadow-elevated);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: var(--font-size-ui-xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast);
+  transition-delay: 0s;
+}
+
+/* :has(:focus-visible) rather than :focus-within, so a mouse click on the
+   trigger does not also pop the tooltip -- matching the previous
+   dockButton:focus-visible behavior exactly. */
+.wrapper:hover .bubble,
+.wrapper:has(:focus-visible) .bubble {
+  opacity: 1;
+  transition-delay: var(--motion-tooltip-delay);
+}
+
+.shortcut {
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-app);
+  padding: 0 var(--space-1);
+  color: var(--color-fg-muted);
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.wrapper[data-placement="right"] .bubble {
+  top: 50%;
+  left: calc(100% + var(--space-2));
+  transform: translateY(-50%);
+}
+
+.wrapper[data-placement="left"] .bubble {
+  top: 50%;
+  right: calc(100% + var(--space-2));
+  transform: translateY(-50%);
+}
+
+.wrapper[data-placement="top"] .bubble {
+  bottom: calc(100% + var(--space-2));
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.wrapper[data-placement="bottom"] .bubble {
+  top: calc(100% + var(--space-2));
+  left: 50%;
+  transform: translateX(-50%);
+}

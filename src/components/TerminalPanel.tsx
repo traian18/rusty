@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 import { X, Plus } from "lucide-react";
 import { useWorkspaceStore } from "../store";
 import { LocalTerminal } from "./LocalTerminal";
+import { Tooltip } from "./ui";
 import styles from "./TerminalPanel.module.css";
 
 export const TerminalPanel: React.FC = () => {
@@ -148,15 +149,17 @@ export const TerminalPanel: React.FC = () => {
             })}
           </div>
 
-          <button
-            id="terminal-new"
-            type="button"
-            onClick={() => addTerminalTab("local")}
-            className={styles.newTerminal}
-            title="New Terminal"
-          >
-            <Plus size={13} />
-          </button>
+          <Tooltip id="terminal-new-tooltip" label="New Terminal" placement="top">
+            <button
+              id="terminal-new"
+              type="button"
+              onClick={() => addTerminalTab("local")}
+              className={styles.newTerminal}
+              aria-label="New Terminal"
+            >
+              <Plus size={13} />
+            </button>
+          </Tooltip>
         </div>
 
         {/* Right Section: Clear button + Expand/Collapse */}

@@ -37,10 +37,10 @@ loader.init().then((monaco) => {
 
 interface FileTabProps {
   tab: any;
-  groupId: string;
+  isActive: boolean;
 }
 
-export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
+export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
   const [fileContent, setFileContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -69,13 +69,10 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
   const inlineChatCommandRef = useRef<{ dispose: () => void } | null>(null);
   const inlineChatSessionIdRef = useRef(`inline-chat-${tab.id}-${Date.now()}`);
 
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
-  
-  const targetGroup = editorGroups.find((g) => g.id === groupId);
-  const isActive = targetGroup ? targetGroup.activeTabId === tab.id : false;
+
   const isMarkdown = getFileTypeDetails(tab.key).language === "markdown";
 
   useEffect(() => {
@@ -378,7 +375,10 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
     if (monaco) {
       inlineChatCommandRef.current?.dispose();
       inlineChatCommandRef.current = editor.addAction({
-        id: `rusty.inlineChat.${groupId}.${tab.id}`,
+        // The id used to be namespaced by editor group, because the same tab
+        // could be mounted in two split panes at once. Tab ids are unique now,
+        // so there can only ever be one editor per tab.
+        id: `rusty.inlineChat.${tab.id}`,
         label: "Open Inline Chat",
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
         run: () => {

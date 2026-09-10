@@ -804,13 +804,13 @@ export const Workspace: React.FC = () => {
             <RustyTab tab={tab} onExecuteNode={executeNode} onStopExecution={stopExecution} />
           )}
           {tab.type === "file" && (
-            <FileTab tab={tab} groupId={groupId} />
+            <FileTab tab={tab} isActive={isActive} />
           )}
           {tab.type === "task" && (
-            <TaskTab tab={tab} onExecuteNode={executeNode} onStopExecution={stopExecution} groupId={groupId} />
+            <TaskTab tab={tab} onExecuteNode={executeNode} onStopExecution={stopExecution} isActive={isActive} />
           )}
           {tab.type === "git-diff" && (
-            <GitDiffTab tab={tab} groupId={groupId} />
+            <GitDiffTab tab={tab} isActive={isActive} />
           )}
           {tab.type === "llm-setup" && (
             <LlmSetupTab />
@@ -831,7 +831,7 @@ export const Workspace: React.FC = () => {
             <WorkspaceTab />
           )}
           {tab.type === "agent" && (
-            <AgentTab tab={tab} groupId={groupId} />
+            <AgentTab tab={tab} />
           )}
           {tab.type === "onboarding" && (
             <OnboardingTab />

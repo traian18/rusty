@@ -17,7 +17,6 @@ import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
 
 interface AgentTabProps {
   tab: any;
-  groupId: string;
 }
 
 interface SavedChat {
@@ -28,7 +27,7 @@ interface SavedChat {
   messageCount: number;
 }
 
-export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) => {
+export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
   const activeModel = useWorkspaceStore((state) => state.activeModel);

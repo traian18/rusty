@@ -19,21 +19,17 @@ interface TaskTabProps {
   tab: any;
   onExecuteNode: (nodeId: string, customPrompt?: string) => void;
   onStopExecution: (nodeId: string) => void;
-  groupId: string;
+  isActive: boolean;
 }
 
-export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExecution, groupId }) => {
+export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExecution, isActive }) => {
   const nodes = useWorkspaceStore((state) => state.nodes);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const updateTaskNode = useWorkspaceStore((state) => state.updateTaskNode);
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
   const chatHistory = useWorkspaceStore((state) => state.globalChatHistory[taskNodeId] || EMPTY_ARRAY);
-  
-  const targetGroup = editorGroups.find((g) => g.id === groupId);
-  const isActive = targetGroup ? targetGroup.activeTabId === tab.id : false;
 
   const taskNodeId = tab.key;
   const taskNode = nodes.find((n) => n.id === taskNodeId);

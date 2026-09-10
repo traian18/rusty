@@ -10,16 +10,12 @@ import { createMonacoDiffOptions } from "../../editor/monacoOptions";
 
 interface GitDiffTabProps {
   tab: any;
-  groupId: string;
+  isActive: boolean;
 }
 
-export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, groupId }) => {
+export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
-  
-  const targetGroup = editorGroups.find((g) => g.id === groupId);
-  const isActive = targetGroup ? targetGroup.activeTabId === tab.id : false;
 
   const [gitOriginalCode, setGitOriginalCode] = useState("");
   const [gitModifiedCode, setGitModifiedCode] = useState("");

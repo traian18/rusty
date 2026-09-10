@@ -195,7 +195,6 @@
 /* Enable hardware accelerated rendering globally for improved quality and frame rates */
 .monaco-editor,
 .workspace-container,
-.editor-container,
 .tabs-container,
 .side-pane,
 .modal-overlay {

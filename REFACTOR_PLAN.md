@@ -3,7 +3,7 @@
 ## Master checklist
 
 - [x] PR 0 — Establish the baseline and test harness
-- [ ] PR 1 — Replace editor groups with a declarative single-workspace tab system
+- [x] PR 1 — Replace editor groups with a declarative single-workspace tab system
 - [ ] PR 2 — Refactor the application shell and hide the explorer by default
 - [ ] PR 3 — Add an extensible application startup procedure
 - [ ] PR 4 — Complete the shared sidecar agent protocol migration
@@ -21,10 +21,10 @@ The work should be delivered as a sequence of focused migrations rather than one
 
 ## Current architecture findings
 
-- Tabs are stored as `editorGroups`, with split and move behavior in `src/store/slices/createEditorSlice.ts`.
-- Tab uniqueness is duplicated and hard-coded instead of being enforced through `src/components/tabs/TabRegistry.ts`.
-- Agent tabs bypass `openTab` and always create another instance.
-- `src/components/Workspace.tsx` handles layout, tab rendering, agent execution, sockets, close interception, VFS operations, permissions, and reconciliation.
+- ~~Tabs are stored as `editorGroups`, with split and move behavior in `src/store/slices/createEditorSlice.ts`.~~ Resolved in PR 1.
+- ~~Tab uniqueness is duplicated and hard-coded instead of being enforced through `src/components/tabs/TabRegistry.ts`.~~ Resolved in PR 1 (`src/tabs/policy.ts`).
+- ~~Agent tabs bypass `openTab` and always create another instance.~~ Resolved in PR 1.
+- `src/components/Workspace.tsx` handles layout, tab rendering, agent execution, sockets, close interception, VFS operations, permissions, and reconciliation. (PR 1 removed the layout and tab-rendering halves; agent execution, sockets, VFS and permissions remain, for PR 7.)
 - The project explorer starts open in `src/App.tsx`.
 - A versioned agent protocol already exists in `shared/agentProtocol.ts`, but most consumers still use a WebSocket compatibility facade.
 - Integration polling begins when `LlmSetupTab` mounts instead of during application startup.
@@ -152,32 +152,46 @@ One command validates frontend types and build, frontend tests, sidecar protocol
 
 ### Checklist
 
-- [ ] Make the typed tab registry authoritative.
-- [ ] Introduce `tabs`, `activeTabId`, `openTab`, `activateTab`, `closeTab`, `updateTab`, and optional `reorderTab` actions.
-- [ ] Implement `global`, `resource`, and `multiple` uniqueness strategies.
-- [ ] Define typed payloads for every tab type.
-- [ ] Route canvas creation through `openTab`.
-- [ ] Route agent creation through `openTab` and enforce its global singleton policy.
-- [ ] Make file tabs unique by canonical path.
-- [ ] Make Git tabs unique by repository-aware identity.
-- [ ] Convert `FileTab`, `TaskTab`, and `GitDiffTab` away from `groupId`.
-- [ ] Update canvas helpers to resolve the active canvas without editor groups.
-- [ ] Centralize close guards and mounted-lifecycle policies.
-- [ ] Add migration logic for any persisted editor-group state.
-- [ ] Remove `EditorGroup`, `editorGroups`, `activeGroupId`, and `groupSizes`.
-- [ ] Remove `splitTab`, `moveTab`, group resizers, split buttons, and cross-group drop targets.
+- [x] Make the typed tab registry authoritative. (Authored as `src/tabs/`; the old `TabRegistry.ts` was dead code and was deleted rather than migrated.)
+- [x] Introduce `tabs`, `activeTabId`, `openTab`, `activateTab`, `closeTab`, `updateTab`, and optional `reorderTab` actions. (`reorderTab` deliberately not added — see deviations.)
+- [x] Implement `global`, `resource`, and `multiple` uniqueness strategies. (`multiple` is implemented and tested but unused by any current tab type.)
+- [x] Define typed payloads for every tab type. (Flat discriminated union rather than a nested `payload` — see deviations.)
+- [x] Route canvas creation through `openTab`.
+- [x] Route agent creation through `openTab` and enforce its global singleton policy.
+- [x] Make file tabs unique by canonical path.
+- [x] Make Git tabs unique by repository-aware identity. (The tab components now also *use* `repoPath`, so identity and behavior agree.)
+- [x] Convert `FileTab`, `TaskTab`, and `GitDiffTab` away from `groupId`.
+- [x] Update canvas helpers to resolve the active canvas without editor groups.
+- [x] Centralize close guards and mounted-lifecycle policies.
+- [x] ~~Add migration logic for any persisted editor-group state.~~ **Moot — nothing persists tab state.** Verified: no zustand persist middleware, `saveSecureConfig` stores seven non-tab keys, `.rusty/canvas/*.json` holds one canvas's graph with no layout, no localStorage key holds tabs, and `tauri-plugin-window-state` is window geometry only.
+- [x] Remove `EditorGroup`, `editorGroups`, `activeGroupId`, and `groupSizes`.
+- [x] Remove `splitTab`, `moveTab`, group resizers, split buttons, and cross-group drop targets.
 
 ### Required tests
 
-- [ ] Every global singleton opens only once.
-- [ ] The agent tab opens only once.
-- [ ] Two different files open two tabs.
-- [ ] Relative, absolute, and normalized references to one file resolve to one tab.
-- [ ] Reopening a file updates its requested line and activates it.
-- [ ] Dirty and running close guards still work.
-- [ ] Closing active, inactive, first, last, and only tabs selects the correct fallback.
-- [ ] Workspace and branch transitions leave valid tab state.
-- [ ] Canvas state does not leak between canvas tabs.
+- [x] Every global singleton opens only once.
+- [x] The agent tab opens only once.
+- [x] Two different files open two tabs.
+- [x] Relative, absolute, and normalized references to one file resolve to one tab.
+- [x] Reopening a file updates its requested line and activates it.
+- [x] Dirty and running close guards still work.
+- [x] Closing active, inactive, first, last, and only tabs selects the correct fallback.
+- [x] Workspace and branch transitions leave valid tab state.
+- [x] Canvas state does not leak between canvas tabs.
+
+### Deviations from this plan, and why
+
+- **Flat discriminated union instead of `TabInstance<TPayload>`.** Per-type fields are named for what they are (`path`, `canvasId`, `repoPath`) rather than nested under `payload`. Same type safety, one less indirection at ~46 read sites.
+- **No separate `identity` field.** With nothing persisted and no type using `multiple`, `id === identity` for every live tab; a second field would need syncing at every call site for no present benefit. Adding it later is purely additive.
+- **No `reorderTab`.** The plan allows reordering "if desired", but no intra-strip reorder existed to preserve — the only drag-and-drop was cross-group tab moves, which died with split editors. Better as an isolated follow-up than bundled here.
+- **`type: "rusty"` dropped here rather than in PR 7.** Nothing ever constructed one, and its remaining read sites were all in files this PR rewrote. PR 7's "remove compatibility aliases" item is correspondingly smaller.
+- **Cleanup-on-close pulled forward from PR 7.** `VfsRegistry.destroy` had zero callers and `closeTab` pruned nothing, so canvas contexts, chat histories and VFS instances leaked for the process lifetime — and `resetForBranchChange` leaked them again on every branch switch. A flat tab array made "is this tab still open?" a one-liner, so fixing it here was cheap. PR 7 still owns the broader lifecycle-owner work.
+
+### Known gaps left for later
+
+- A canvas auto-save pending inside its debounce window is still dropped when the tab closes. Pre-existing; fixing it properly needs `saveCanvasNow` to take a state snapshot instead of reading the live store.
+- Reopening a file at the *same* line it already has does not re-scroll, because `FileTab`'s effect is keyed on `[tab.line]`. A monotonic navigation counter would fix it.
+- `revealFileInTree` splits on `/` and will mismatch native Windows separators now that `tab.path` is canonicalized. Flagged for PR 6.
 
 ## PR 2 — Clean application shell
 
@@ -470,7 +484,7 @@ All listed major languages receive correct syntax highlighting or an explicitly 
 - [ ] Give protocol subscriptions and runs an explicit lifecycle owner.
 - [ ] Give VFS instances an explicit lifecycle owner.
 - [ ] Replace remaining `any` tab types with discriminated payload types.
-- [ ] Remove compatibility aliases such as `canvas`/`rusty` after state migration.
+- [ ] Remove compatibility aliases such as `canvas`/`rusty` after state migration. (`rusty` was already dropped in PR 1 — nothing constructed one, and its read sites were in files PR 1 rewrote.)
 - [ ] Add an error boundary per tab.
 - [ ] Complete visual consistency and accessibility QA.
 - [ ] Remove dead components, state fields, CSS, and compatibility code.

@@ -12,10 +12,6 @@
   user-select: none;
 }
 
-.focused {
-  box-shadow: inset 0 -1px 0 var(--color-primary);
-}
-
 .tabs {
   display: flex;
   min-width: 0;
@@ -82,10 +78,8 @@
   left: 0;
   height: 2px;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--color-border-default);
-}
-
-.accentFocused {
+  /* With a single tab strip there is no longer an "active but unfocused"
+     state, so the active tab always gets the primary accent. */
   background: var(--color-primary);
 }
 

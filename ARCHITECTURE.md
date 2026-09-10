@@ -43,7 +43,8 @@ Current violations, recorded rather than hidden:
   transport layer. Targeted by PR 3/PR 4.
 - Components own agent WebSockets directly (`Workspace.tsx`'s
   `executeNode`/`socketsRef`) instead of going through a shared client.
-  Targeted by PR 4 and PR 7.
+  Targeted by PR 4 and PR 7. This is also why the `agent` tab policy declares
+  `keepAlive: "always"` — an agent's run dies with its component.
 
 ## Slice import-time purity
 
@@ -61,38 +62,57 @@ Current violations:
   at slice-creation time, touching the `agentHarnessClient` singleton (which
   reads `SIDECAR_WS_URL` in its constructor).
 
-This is exactly why the tab/editor characterization tests
-(`src/store/slices/createEditorSlice.test.ts`,
+This is exactly why the tab characterization tests
+(`src/store/slices/createTabsSlice.test.ts`,
 `src/store/slices/createAgentSlice.test.ts`) compose only the slices under
 test via `src/test/tabTestStore.ts`, rather than importing the composed
 `src/store.ts`. PR 3 (startup procedure) is where this gets fixed at the
 source.
 
-## Tab identity
+## The tab system
 
-The target model (full detail in `REFACTOR_PLAN.md`'s "Tab architecture"
-section) is a single `tabs`/`activeTabId` collection with a typed registry
-governing uniqueness, identity, and lifecycle per tab type.
+Tabs live in a single flat collection — `tabs: TabInstance[]` plus
+`activeTabId` — and every behavioral decision about a tab type is declared once
+in `src/tabs/`, not re-derived at call sites.
 
-Today, identity is computed ad hoc at each call site, in at least two
-incompatible formats for file tabs alone:
+**`TabInstance` is a discriminated union on `type`**, with per-type fields
+named for what they are: `{type:"file", path, line?}`,
+`{type:"git-diff", repoPath, path, diffType, commitHash?}`. There is no
+general-purpose `key` field; the old one meant a file path, a canvas id or a
+task node id depending on the tab type, which is exactly what made call sites
+guess.
 
-- `` `file_${path.replace(/[^a-zA-Z0-9]/g, "_")}` `` — used in
-  `FileTree.tsx`, `SearchPalette.tsx`, `AgentTab.tsx`,
-  `FileTreePresenter.ts`, and `contextNode/helpers.ts`'s `sanitizeTabId`.
-- `` `file-${path}` `` — used in `monacoLspBinding.ts` and `FileTab.tsx`.
+**The registry is split in two tables keyed by the same `TabType`**, and that
+split is load-bearing:
 
-These diverge for the same file (opening it from the tree vs. from "go to
-definition" can produce two tabs for one file) and the first scheme is not
-injective (`/a/b.ts` and `/a-b.ts` collide). `git-history` tabs have a
-similar split between a fixed id and a key-scoped id. See
-`src/components/tabs/tabIdentity.test.ts` for the executable record of the
-current state.
+| Module | Owns | Imported by |
+|---|---|---|
+| `src/tabs/policy.ts` | identity, uniqueness, keepAlive, close guards, prune rules | the store |
+| `src/tabs/views.tsx` | React component, icon, surface | the view only |
 
-`src/components/tabs/TabRegistry.ts` already declares a `TAB_CONFIGS` table
-with per-type `isSingleton`/`allowDuplicates` flags, but it is **dead code**
-today — nothing imports it. PR 1 makes it authoritative; until then, treat it
-as documentation of intent rather than a source of truth.
+Keeping them apart is what lets the store declare tab behavior without pulling
+all 13 tab components into its import graph — which would make the store
+untestable under a bare Node environment. `src/tabs/layering.test.ts` fails the
+build if `src/store/**` or any non-view `src/tabs/*.ts` imports React or
+`views.tsx`. For the same reason, non-store cleanup lives in
+`src/tabs/effects.ts` rather than in the policy table: a policy that reached
+into services would create a store → policy → service → store cycle.
+
+**Identity rules.** `openTab(request)` resolves the policy, computes a
+canonical identity, and either activates the existing tab with that id or
+creates one — so `id === identity` for every live tab. Global singletons use
+their own type name as the identity, which means the ordinary lookup doubles as
+the singleton check with no special-casing. File identity is a canonicalized,
+root-resolved path; case folding applies to the identity string only, never to
+the stored `path`, which is handed verbatim to Tauri, Monaco and git. Canvas
+identity is deliberately unprefixed because `canvasFileService` round-trips it
+through `.rusty/canvas/*.json`.
+
+**Close guards are pure.** `evaluateClose(state, tabId)` returns either
+`allow` or a description of what needs confirming; the view renders the modal.
+Every close affordance — tab strip, overflow menu, keyboard shortcut — routes
+through the `src/tabs/closeRequests.ts` event channel so the guards cannot be
+bypassed.
 
 ## Migration rules (for PRs 1-7)
 

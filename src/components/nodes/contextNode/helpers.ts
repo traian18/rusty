@@ -8,14 +8,6 @@
 import type { SearchMatch } from "../../../services/searchService";
 
 /**
- * Sanitizes an absolute file path for use as a unique tab identifier.
- * Replaces all non-alphanumeric characters with underscores.
- */
-export function sanitizeTabId(path: string): string {
-  return `file_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
-}
-
-/**
  * Builds a default display name for the context node when a file is
  * attached, unless the user has already provided a custom name.
  */

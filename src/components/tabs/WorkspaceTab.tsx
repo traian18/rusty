@@ -112,7 +112,7 @@ export const WorkspaceTab: React.FC = () => {
 
             {rootPath && (
               <div
-                onClick={() => useWorkspaceStore.getState().createCanvasTab()}
+                onClick={() => useWorkspaceStore.getState().openTab({ type: "canvas" })}
                 className="group flex flex-col justify-between p-6 h-48 rounded-2xl bg-[var(--bg-sidebar)] border border-[var(--border-color)] hover:border-[var(--color-status-success-border)] hover:shadow-xl cursor-pointer transition-all duration-300 relative overflow-hidden"
               >
                 <div className="absolute top-0 right-0 w-24 h-24 bg-[var(--color-status-success-bg)] rounded-bl-full pointer-events-none group-hover:bg-[var(--color-status-success-bg)] transition-colors" />

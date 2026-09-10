@@ -516,7 +516,7 @@ const RustyTabContent: React.FC<RustyTabProps> = ({ tab, onExecuteNode, onStopEx
     }
     try {
       const filePath = await canvasFileService.saveCanvas(tab.id, saveTitle);
-      useWorkspaceStore.getState().updateTabTitle(tab.id, saveTitle);
+      useWorkspaceStore.getState().updateTab(tab.id, { title: saveTitle });
       useWorkspaceStore
         .getState()
         .updateCanvasContext(tab.id, { hasBeenSaved: true });

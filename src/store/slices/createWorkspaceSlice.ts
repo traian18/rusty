@@ -1,5 +1,9 @@
 import { createEmptyCanvasContext } from "../canvasHelpers";
+import { tabsAfterBranchChange, tabsAfterWorkspaceChange } from "../../tabs/transitions";
+import { pruneForClosedTab } from "../../tabs/policy";
+import { disposeTab } from "../../tabs/effects";
 import type { WorkspaceSliceCreator } from "../sliceTypes";
+import type { WorkspaceState } from "../types";
 
 export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
   rootPath: "",
@@ -21,15 +25,11 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
       }
     }
 
+    const opened = tabsAfterWorkspaceChange();
     set({
       rootPath: path,
-      editorGroups: [{
-        id: "group_0",
-        openTabs: [{ id: "canvas", type: "canvas", title: "Rusty", key: "canvas" }],
-        activeTabId: "canvas",
-      }],
-      activeGroupId: "group_0",
-      groupSizes: [1],
+      tabs: opened.tabs,
+      activeTabId: opened.activeTabId,
       canvasContexts: { canvas: createEmptyCanvasContext() },
       canvasHistories: { canvas: { past: [], future: [] } },
       expandedPaths: {},
@@ -48,25 +48,30 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
 
   setFileTree: (tree) => set({ fileTree: tree }),
 
-  resetForBranchChange: () => set((state) => {
-    const canvasTab = state.editorGroups
-      .flatMap((group) => group.openTabs)
-      .find((tab) => tab.type === "canvas" || tab.type === "rusty") || {
-        id: "canvas",
-        type: "canvas" as const,
-        title: "Rusty",
-        key: "canvas",
+  resetForBranchChange: () => {
+    // Dropped tabs are pruned and disposed here. The previous implementation
+    // discarded them without cleanup, leaking a canvas context, chat history
+    // and VFS instance on every branch switch.
+    const { tabs, activeTabId, dropped } = tabsAfterBranchChange(get());
+
+    set((state) => {
+      let pruned: Partial<WorkspaceState> = {};
+      for (const tab of dropped) {
+        pruned = { ...pruned, ...pruneForClosedTab(tab, { ...state, ...pruned } as WorkspaceState) };
+      }
+      return {
+        fileTree: [],
+        expandedPaths: {},
+        revealPath: null,
+        selectedNodeId: null,
+        tabs,
+        activeTabId,
+        ...pruned,
       };
-    return {
-      fileTree: [],
-      expandedPaths: {},
-      revealPath: null,
-      selectedNodeId: null,
-      editorGroups: [{ id: "group_0", openTabs: [canvasTab], activeTabId: canvasTab.id }],
-      activeGroupId: "group_0",
-      groupSizes: [1],
-    };
-  }),
+    });
+
+    for (const tab of dropped) disposeTab(tab);
+  },
 
   setPathExpanded: (path, expanded) => set((state) => ({
     expandedPaths: { ...state.expandedPaths, [path]: expanded },

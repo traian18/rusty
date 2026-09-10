@@ -4,20 +4,11 @@ import { resolveSkill, toSkillData, BUILT_IN_SKILL_IDS } from "../config/skillDe
 import { VfsRegistry, setExecutingNode } from "../services/vfs";
 import { notify } from "../notificationStore";
 import { onCloseTabRequest } from "../tabs/closeRequests";
+import { shouldKeepMounted } from "../tabs/policy";
+import { evaluateClose } from "../tabs/closeGuards";
+import { TabPanel, getTabView, type TabViewContext } from "../tabs/views";
+import { useShallow } from "zustand/react/shallow";
 import { TabBar } from "./TabBar";
-import { RustyTab } from "./tabs/canvas/RustyTab";
-import { FileTab } from "./tabs/FileTab";
-import { TaskTab } from "./tabs/TaskTab";
-import { GitDiffTab } from "./tabs/GitDiffTab";
-import { LlmSetupTab } from "./tabs/LlmSetupTab";
-import { SettingsTab } from "./tabs/SettingsTab";
-import { GitHistoryTab } from "./tabs/GitHistoryTab";
-import { WorkspaceTab } from "./tabs/WorkspaceTab";
-import { AgentTab } from "./tabs/AgentTab";
-import { SkillsTab } from "./tabs/SkillsTab";
-import { McpIntegrationTab } from "./mcp/McpIntegrationTab";
-import { OnboardingTab } from "./tabs/OnboardingTab";
-import { MetricsTab } from "./tabs/MetricsTab";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X, Save, HelpCircle } from "lucide-react";
 import { canvasFileService } from "./tabs/canvas/services/canvasFileService";
@@ -33,18 +24,19 @@ export const Workspace: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const [closeIntercept, setCloseIntercept] = useState<{
     tabId: string;
-    // Optional: close requests arriving over the event channel carry only a
-    // tab id, and `closeTab` resolves the owning group itself when omitted.
-    groupId?: string;
     type: "unsaved" | "running";
     title: string;
   } | null>(null);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const groupSizes = useWorkspaceStore((state) => state.groupSizes);
-  const setGroupSizes = useWorkspaceStore((state) => state.setGroupSizes);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
-  const setActiveGroupId = useWorkspaceStore((state) => state.setActiveGroupId);
-  const moveTab = useWorkspaceStore((state) => state.moveTab);
+  const tabs = useWorkspaceStore((state) => state.tabs);
+  const activeTabId = useWorkspaceStore((state) => state.activeTabId);
+  // Subscribed rather than read imperatively during render: a canvas that
+  // starts running while inactive has to re-mount, and the previous
+  // getState() read inside the render loop never triggered that.
+  const keepMountedIds = useWorkspaceStore(
+    useShallow((state) =>
+      state.tabs.filter((tab) => shouldKeepMounted(tab, state)).map((tab) => tab.id),
+    ),
+  );
 
   const addLog = useWorkspaceStore((state) => state.addLog);
   const clearLogs = useWorkspaceStore((state) => state.clearLogs);
@@ -53,7 +45,6 @@ export const Workspace: React.FC = () => {
   const globalContextSummary = useWorkspaceStore((state) => state.globalContextSummary);
 
   const socketsRef = useRef<Map<string, WebSocket>>(new Map());
-  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: CustomEvent) => {
@@ -65,42 +56,6 @@ export const Workspace: React.FC = () => {
     window.addEventListener("tasknode-stop-request", handler as EventListener);
     return () => window.removeEventListener("tasknode-stop-request", handler as EventListener);
   }, []);
-
-  const handleMouseDown = (e: React.MouseEvent, index: number) => {
-    e.preventDefault();
-    if (!containerRef.current) return;
-
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const startX = e.clientX;
-    const startSizes = [...groupSizes];
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - startX;
-      const deltaPercent = deltaX / containerRect.width;
-
-      const newSizes = [...startSizes];
-      const newPercent_i = startSizes[index] + deltaPercent;
-
-      const minPercent = 0.10;
-      const totalOfTwo = startSizes[index] + startSizes[index + 1];
-
-      let percent_i = Math.max(minPercent, Math.min(totalOfTwo - minPercent, newPercent_i));
-      let percent_ip1 = totalOfTwo - percent_i;
-
-      newSizes[index] = percent_i;
-      newSizes[index + 1] = percent_ip1;
-
-      setGroupSizes(newSizes);
-    };
-
-    const handleMouseUp = () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  };
 
   // WebSocket execution runner
   const executeNode = async (nodeId: string, customPrompt?: string) => {
@@ -670,51 +625,15 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const handleCloseTab = (tabId: string, groupId?: string) => {
-    const tab = useWorkspaceStore.getState().editorGroups
-      .flatMap((g) => g.openTabs)
-      .find((t) => t.id === tabId);
-
-    if (!tab || tab.type !== "canvas") {
-      useWorkspaceStore.getState().closeTab(tabId, groupId);
+  // The guard itself is a pure function over store state (src/tabs/closeGuards);
+  // this only decides whether to close immediately or raise a confirmation.
+  const handleCloseTab = (tabId: string) => {
+    const guard = evaluateClose(useWorkspaceStore.getState(), tabId);
+    if (guard.kind === "allow") {
+      useWorkspaceStore.getState().closeTab(tabId);
       return;
     }
-
-    const context = useWorkspaceStore.getState().canvasContexts[tabId];
-    if (!context) {
-      useWorkspaceStore.getState().closeTab(tabId, groupId);
-      return;
-    }
-
-    // 1. Check for running processes
-    const hasRunningNodes = Object.values(context.nodeStatus || {}).some(
-      (status) => status === "running"
-    );
-
-    if (hasRunningNodes) {
-      setCloseIntercept({
-        tabId,
-        groupId,
-        type: "running",
-        title: tab.title
-      });
-      return;
-    }
-
-    // 2. Check for unsaved changes
-    const hasUnsavedChanges = !context.hasBeenSaved && (context.nodes.length > 0 || context.edges.length > 0);
-    if (hasUnsavedChanges) {
-      setCloseIntercept({
-        tabId,
-        groupId,
-        type: "unsaved",
-        title: tab.title
-      });
-      return;
-    }
-
-    // No running processes or unsaved changes, close immediately
-    useWorkspaceStore.getState().closeTab(tabId, groupId);
+    setCloseIntercept({ tabId, type: guard.reason, title: guard.title });
   };
 
   // Every close affordance routes through here, so the unsaved/running guards
@@ -726,7 +645,7 @@ export const Workspace: React.FC = () => {
 
   const handleConfirmCloseRunning = async () => {
     if (!closeIntercept) return;
-    const { tabId, groupId } = closeIntercept;
+    const { tabId } = closeIntercept;
 
     // Stop all running nodes in this tab
     const context = useWorkspaceStore.getState().canvasContexts[tabId];
@@ -747,24 +666,21 @@ export const Workspace: React.FC = () => {
       }
     }
 
-    // Next, check for unsaved changes
-    const hasUnsavedChanges = !context.hasBeenSaved && (context.nodes.length > 0 || context.edges.length > 0);
-    if (hasUnsavedChanges) {
-      setCloseIntercept({
-        tabId,
-        groupId,
-        type: "unsaved",
-        title: closeIntercept.title
-      });
-    } else {
-      setCloseIntercept(null);
-      useWorkspaceStore.getState().closeTab(tabId, groupId);
+    // Re-evaluate rather than hand-rolling the unsaved check a second time.
+    // The old second check dereferenced `context` unguarded, so a canvas whose
+    // context had vanished mid-close threw here.
+    const guard = evaluateClose(useWorkspaceStore.getState(), tabId);
+    if (guard.kind === "confirm") {
+      setCloseIntercept({ tabId, type: guard.reason, title: guard.title });
+      return;
     }
+    setCloseIntercept(null);
+    useWorkspaceStore.getState().closeTab(tabId);
   };
 
   const handleSaveAndClose = async (saveTitle: string) => {
     if (!closeIntercept) return;
-    const { tabId, groupId } = closeIntercept;
+    const { tabId } = closeIntercept;
 
     if (!saveTitle.trim()) {
       notify("Invalid input", "Please enter a valid title", "info");
@@ -773,10 +689,10 @@ export const Workspace: React.FC = () => {
 
     try {
       const filePath = await canvasFileService.saveCanvas(tabId, saveTitle);
-      useWorkspaceStore.getState().updateTabTitle(tabId, saveTitle);
+      useWorkspaceStore.getState().updateTab(tabId, { title: saveTitle });
       useWorkspaceStore.getState().updateCanvasContext(tabId, { hasBeenSaved: true });
       setCloseIntercept(null);
-      useWorkspaceStore.getState().closeTab(tabId, groupId);
+      useWorkspaceStore.getState().closeTab(tabId);
       notify("Saved", `Pipeline saved to: ${filePath}`, "success");
     } catch (e: any) {
       notify("Save failed", `Error saving pipeline: ${e.message || e}`, "error");
@@ -785,120 +701,44 @@ export const Workspace: React.FC = () => {
 
   const handleDiscardAndClose = () => {
     if (!closeIntercept) return;
-    const { tabId, groupId } = closeIntercept;
     setCloseIntercept(null);
-    useWorkspaceStore.getState().closeTab(tabId, groupId);
+    useWorkspaceStore.getState().closeTab(closeIntercept.tabId);
   };
 
-  const renderTabPanel = (tabsList: any[], activeId: string | null, groupId: string) => {
-    return tabsList.map((tab) => {
-      const isActive = tab.id === activeId;
-      const isCanvas = tab.type === "canvas";
-      const canvasContext = isCanvas ? useWorkspaceStore.getState().canvasContexts[tab.id] : undefined;
-      const canvasHasRunningWork = !!canvasContext && Object.values(canvasContext.nodeStatus || {})
-        .some((status) => status === "running");
+  const tabViewContext: TabViewContext = { executeNode, stopExecution };
 
-      // Canvas data lives in the workspace store, so inactive idle canvases can
-      // release their ReactFlow/DOM allocation. Keep a canvas mounted only while
-      // work is running; task sockets themselves are owned by Workspace.
-      const keepMounted = (isCanvas && canvasHasRunningWork) || tab.type === "git-history" || tab.type === "git-diff" || tab.type === "agent";
+  const renderTabPanel = () => {
+    return tabs.map((tab) => {
+      const isActive = tab.id === activeTabId;
+      // Inactive tabs unmount unless their policy says otherwise. Kept-mounted
+      // panels are parked off-screen so their DOM, sockets and editor state
+      // survive without being visible.
+      const keepMounted = keepMountedIds.includes(tab.id);
       if (!isActive && !keepMounted) return null;
 
-      const bgClass = isCanvas ? "bg-[var(--bg-canvas)]" : "bg-[var(--bg-editor)]";
+      const bgClass =
+        getTabView(tab.type).surface === "canvas" ? "bg-[var(--bg-canvas)]" : "bg-[var(--bg-editor)]";
+
       return (
         <div
-          key={`${groupId}-${tab.id}`}
+          key={tab.id}
           className={`${isActive ? "w-full h-full" : "absolute -left-[99999px] top-0 w-full h-full"} ${bgClass} overflow-hidden`}
         >
-          {tab.type === "canvas" && (
-            <RustyTab tab={tab} onExecuteNode={executeNode} onStopExecution={stopExecution} />
-          )}
-          {tab.type === "file" && (
-            <FileTab tab={tab} isActive={isActive} />
-          )}
-          {tab.type === "task" && (
-            <TaskTab tab={tab} onExecuteNode={executeNode} onStopExecution={stopExecution} isActive={isActive} />
-          )}
-          {tab.type === "git-diff" && (
-            <GitDiffTab tab={tab} isActive={isActive} />
-          )}
-          {tab.type === "llm-setup" && (
-            <LlmSetupTab />
-          )}
-          {tab.type === "skills" && (
-            <SkillsTab />
-          )}
-          {tab.type === "mcp-integration" && (
-            <McpIntegrationTab />
-          )}
-          {tab.type === "settings" && (
-            <SettingsTab />
-          )}
-          {tab.type === "git-history" && (
-            <GitHistoryTab tab={tab} />
-          )}
-          {tab.type === "workspace" && (
-            <WorkspaceTab />
-          )}
-          {tab.type === "agent" && (
-            <AgentTab tab={tab} />
-          )}
-          {tab.type === "onboarding" && (
-            <OnboardingTab />
-          )}
-          {tab.type === "metrics" && (
-            <MetricsTab />
-          )}
+          <TabPanel tab={tab} isActive={isActive} context={tabViewContext} />
         </div>
       );
     });
   };
 
   return (
-    <div ref={containerRef} className="flex-1 flex h-full min-w-0 overflow-hidden relative bg-[var(--bg-editor)] workspace-container">
+    <div className="flex-1 flex h-full min-w-0 overflow-hidden relative bg-[var(--bg-editor)] workspace-container">
       <CommandPermissionPresenter />
-      {editorGroups.map((group, idx) => {
-        const widthPercent = (groupSizes[idx] || (1 / editorGroups.length)) * 100;
-        const isLast = idx === editorGroups.length - 1;
-
-        return (
-          <React.Fragment key={group.id}>
-            {/* Editor Pane Column */}
-            <div
-              style={{ width: `${widthPercent}%` }}
-              className={`flex flex-col h-full min-w-0 overflow-hidden editor-container ${
-                !isLast ? "border-r border-[var(--border-color)]" : ""
-              }`}
-              onClick={() => {
-                if (activeGroupId !== group.id) {
-                  setActiveGroupId(group.id);
-                }
-              }}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                const tabId = e.dataTransfer.getData("text/plain");
-                const fromGroupId = e.dataTransfer.getData("from-group-id");
-                if (tabId && fromGroupId && fromGroupId !== group.id) {
-                  moveTab(tabId, fromGroupId, group.id);
-                }
-              }}
-            >
-              <TabBar groupId={group.id} />
-              <div className="flex-1 min-h-0 relative bg-[var(--bg-editor)] overflow-hidden">
-                {renderTabPanel(group.openTabs, group.activeTabId, group.id)}
-              </div>
-            </div>
-
-            {/* Resize Handle (only show between adjacent panes) */}
-            {!isLast && (
-              <div
-                className="w-1 bg-[var(--border-color)] hover:bg-[var(--accent-color)] active:bg-[var(--accent-color)] cursor-col-resize transition-all flex-shrink-0 z-30 relative"
-                onMouseDown={(e) => handleMouseDown(e, idx)}
-              />
-            )}
-          </React.Fragment>
-        );
-      })}
+      <div className="flex flex-col h-full w-full min-w-0 overflow-hidden">
+        <TabBar />
+        <div className="flex-1 min-h-0 relative bg-[var(--bg-editor)] overflow-hidden">
+          {renderTabPanel()}
+        </div>
+      </div>
 
       {closeIntercept && closeIntercept.type === "running" && createPortal(
         <div className="fixed inset-0 bg-[var(--color-surface-overlay)] backdrop-blur-sm z-50 flex items-center justify-center p-4">

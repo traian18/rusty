@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useWorkspaceStore } from "../store";
 import { selectActiveFilePath, selectActiveTabId } from "../store/tabSelectors";
+import { fileTabIdentity } from "../tabs/identity";
 import { FileIcon } from "../services/fileTypeService";
 import { invoke } from "@tauri-apps/api/core";
 import { MoveDialog } from "./MoveDialog";
@@ -153,12 +154,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
       }
       return;
     }
-    useWorkspaceStore.getState().openTab({
-      id: `file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      type: "file",
-      title: node.name,
-      key: node.path,
-    });
+    useWorkspaceStore.getState().openTab({ type: "file", path: node.path, title: node.name });
   };
 
   const activateEntry = (node: FileEntry) => {
@@ -576,7 +572,7 @@ const FileTreeNode: React.FC<{
   const isSelected = selectedPaths.has(node.path);
   const isFocused = focusedPath === node.path;
   const gitState = getGitState(node, gitStatus);
-  const isActiveFile = activeTabId === `file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const isActiveFile = activeTabId === fileTabIdentity(node.path);
 
   useEffect(() => {
     if (isRenaming) {
@@ -614,7 +610,7 @@ const FileTreeNode: React.FC<{
       await invoke("move_file_or_dir", { src: node.path, dest: newPath });
       await refreshTree();
       const state = useWorkspaceStore.getState();
-      state.closeTab(`file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`);
+      state.closeTab(fileTabIdentity(node.path));
       // Track for undo
       state.setLastRename({ originalPath: node.path, newPath });
       state.loadGitStatus();

@@ -28,6 +28,9 @@ interface parsedDecoration {
  */
 export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
+  // Falls back to the workspace root for the repo-wide graph opened before
+  // subproject selection existed.
+  const repoPath = tab?.repoPath ?? rootPath;
   const loadGitStatus = useWorkspaceStore((state) => state.loadGitStatus);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
 
@@ -68,12 +71,11 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
     }
   };
 
-  const handleOpenFileDiff = (filePath: string, fileName: string, commitHash: string, shortHash: string) => {
+  const handleOpenFileDiff = (filePath: string, _fileName: string, commitHash: string, _shortHash: string) => {
     openTab({
-      id: `git-diff-${commitHash}-${filePath}`,
       type: "git-diff",
-      title: `${fileName} (${shortHash})`,
-      key: filePath,
+      repoPath,
+      path: filePath,
       diffType: "commit",
       commitHash,
     });
@@ -125,18 +127,18 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   // Fetch the commit log from the backend
   const fetchCommitHistory = async () => {
-    if (!rootPath) return;
+    if (!repoPath) return;
     setLoading(true);
     setError(null);
     try {
-      const isFileHistory = tab && tab.key && tab.key !== "git-history";
+      const isFileHistory = Boolean(tab?.path);
       const history: GitCommitInfo[] = isFileHistory
         ? await invoke("git_get_file_commit_history", {
-            rootDir: rootPath,
-            filePath: tab.key,
+            rootDir: repoPath,
+            filePath: tab.path,
           })
         : await invoke("git_get_commit_history", {
-            rootDir: rootPath,
+            rootDir: repoPath,
           });
       setCommits(history);
     } catch (err: any) {
@@ -150,7 +152,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
   // Run on mount or when root path/tab changes
   useEffect(() => {
     fetchCommitHistory();
-  }, [rootPath, tab?.key]);
+  }, [repoPath, tab?.path]);
 
   // Handle manual refresh
   const handleRefresh = async () => {
@@ -232,8 +234,8 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   const unpushedCommitsCount = commits.filter((c) => c.is_unpushed).length;
 
-  const isFileHistory = tab && tab.key && tab.key !== "git-history";
-  const fileBasename = isFileHistory ? tab.key.split(/[/\\]/).pop() || tab.key : "";
+  const isFileHistory = Boolean(tab?.path);
+  const fileBasename = isFileHistory ? tab.path.split(/[/\\]/).pop() || tab.path : "";
 
   return (
     <div className="w-full h-full flex flex-col bg-[var(--bg-app)] font-sans text-xs select-none text-[var(--text-normal)]">
@@ -249,7 +251,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
             </span>
           </div>
           <p className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-lg">
-            {isFileHistory ? `Showing commits affecting ${tab.key}` : "Showing last 100 commits from all branches"}
+            {isFileHistory ? `Showing commits affecting ${tab.path}` : "Showing last 100 commits from all branches"}
           </p>
         </div>
 

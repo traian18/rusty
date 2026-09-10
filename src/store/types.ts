@@ -8,6 +8,7 @@ import type {
 import type { McpServerConfig } from "../components/mcp/types";
 import type { TypographyPreferences } from "../preferences/typography";
 import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences/shortcuts";
+import type { OpenTabRequest, TabInstance } from "../tabs/types";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -114,15 +115,6 @@ export interface GitStatusResult {
   unstaged: GitFileStatus[];
 }
 
-export interface Tab {
-  id: string;
-  type: "canvas" | "rusty" | "file" | "task" | "settings" | "llm-setup" | "git-diff" | "git-history" | "workspace" | "agent" | "skills" | "mcp-integration" | "onboarding" | "metrics";
-  title: string;
-  key: string;
-  diffType?: "staged" | "unstaged" | "commit";
-  commitHash?: string;
-  line?: number;
-}
 
 export interface AgentMessage {
   id: string;
@@ -188,11 +180,6 @@ export type MetricsTimeframe =
   | { mode: "range"; from: string; to: string }
   | { mode: "all-time" };
 
-export interface EditorGroup {
-  id: string;
-  openTabs: Tab[];
-  activeTabId: string | null;
-}
 
 export interface GlobalChatMessage {
   id?: string;
@@ -290,8 +277,6 @@ export interface WorkspaceState {
   onConnectForTab: (tabId: string, connection: Connection) => void;
   updateCanvasContext: (tabId: string, updates: Partial<CanvasContext>) => void;
   loadCanvasTab: (data: any) => string;
-  createCanvasTab: (title?: string) => void;
-  createAgentTab: (title?: string) => void;
   undoCanvasTab: (tabId: string) => void;
   redoCanvasTab: (tabId: string) => void;
 
@@ -391,16 +376,13 @@ export interface WorkspaceState {
   closeTerminalTab: (id: string) => void;
   setActiveTerminalTabId: (id: string) => void;
 
-  editorGroups: EditorGroup[];
-  activeGroupId: string;
-  groupSizes: number[];
-  openTab: (tab: Tab, groupId?: string) => void;
-  closeTab: (id: string, groupId?: string) => void;
-  setActiveTabId: (id: string | null, groupId?: string) => void;
-  splitTab: (id: string, fromGroupId: string) => void;
-  moveTab: (id: string, fromGroupId: string, toGroupId: string) => void;
-  setGroupSizes: (sizes: number[]) => void;
-  setActiveGroupId: (id: string) => void;
+  tabs: TabInstance[];
+  activeTabId: string | null;
+  /** Opens or focuses the tab for this request; returns its id. */
+  openTab: (request: OpenTabRequest) => string;
+  activateTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  updateTab: (id: string, updates: Partial<Omit<TabInstance, "id" | "type">>) => void;
 
   setPathExpanded: (path: string, expanded: boolean) => void;
   togglePathExpanded: (path: string) => void;
@@ -412,7 +394,6 @@ export interface WorkspaceState {
   setSelectedEdgeId: (id: string | null) => void;
   setEdgeStatus: (edgeId: string, status: "idle" | "unreconciled" | "reconciled") => void;
   getSequenceEdges: () => Edge[];
-  updateTabTitle: (tabId: string, title: string) => void;
   lspSettings: LspSettings;
   updateLspSettings: (settings: Partial<LspSettings>) => void;
   saveSecureConfig: () => Promise<void>;

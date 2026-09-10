@@ -14,7 +14,6 @@ interface GitDiffTabProps {
 }
 
 export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
-  const rootPath = useWorkspaceStore((state) => state.rootPath);
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
 
   const [gitOriginalCode, setGitOriginalCode] = useState("");
@@ -27,53 +26,53 @@ export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
     const contexts = useWorkspaceStore.getState().canvasContexts;
     for (const tId in contexts) {
       const ctx = contexts[tId];
-      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.key));
+      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.path));
       if (hasNode) return tId;
     }
     return undefined;
-  }, [tab.key]);
+  }, [tab.path]);
   const { viewMode, isAutoMode, toggleViewMode, enableAutoMode, renderSideBySide } = useDiffViewMode(containerRef);
 
   useEffect(() => {
-    if (!rootPath) return;
+    if (!tab.repoPath) return;
 
     const fetchGitDiffContent = async () => {
       setLoading(true);
       try {
-        console.log(`GitDiffTab loading diff for: ${tab.key} (${tab.diffType || "unstaged"})`);
+        console.log(`GitDiffTab loading diff for: ${tab.path} (${tab.diffType || "unstaged"})`);
         let original = "";
         let modified = "";
 
         if (tab.diffType === "commit" && tab.commitHash) {
           original = await invoke("git_get_file_content_at_rev", {
-            rootDir: rootPath,
+            rootDir: tab.repoPath,
             revision: `${tab.commitHash}~1`,
-            filePath: tab.key,
+            filePath: tab.path,
           });
           modified = await invoke("git_get_file_content_at_rev", {
-            rootDir: rootPath,
+            rootDir: tab.repoPath,
             revision: tab.commitHash,
-            filePath: tab.key,
+            filePath: tab.path,
           });
         } else if (tab.diffType === "staged") {
           original = await invoke("git_get_head_content", {
-            rootDir: rootPath,
-            filePath: tab.key,
+            rootDir: tab.repoPath,
+            filePath: tab.path,
           });
           modified = await invoke("git_get_index_content", {
-            rootDir: rootPath,
-            filePath: tab.key,
+            rootDir: tab.repoPath,
+            filePath: tab.path,
           });
         } else {
           original = await invoke("git_get_index_content", {
-            rootDir: rootPath,
-            filePath: tab.key,
+            rootDir: tab.repoPath,
+            filePath: tab.path,
           });
           try {
-            modified = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.key);
+            modified = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.path);
           } catch (e) {
             try {
-              modified = await invoke("read_file_disk", { path: tab.key });
+              modified = await invoke("read_file_disk", { path: tab.path });
             } catch (err) {
               modified = "";
             }
@@ -92,7 +91,7 @@ export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
     };
 
     fetchGitDiffContent();
-  }, [tab.key, tab.diffType, tab.commitHash, rootPath]);
+  }, [tab.path, tab.diffType, tab.commitHash, tab.repoPath]);
 
   // Adjust editor size when tab active state changes
   useEffect(() => {
@@ -123,7 +122,7 @@ export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
         <div className="flex items-center space-x-3">
           <span className="text-[var(--text-light)] font-bold">{tab.title}</span>
           <span className="text-[var(--text-muted)] text-[10px] truncate max-w-[400px]">
-            {tab.key}
+            {tab.path}
           </span>
         </div>
         <DiffViewToggle
@@ -143,7 +142,7 @@ export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
         ) : (
           <DiffEditor
             height="100%"
-            language={getEditorLanguage(tab.key)}
+            language={getEditorLanguage(tab.path)}
             theme="rusty-custom-theme"
             original={gitOriginalCode}
             modified={gitModifiedCode}

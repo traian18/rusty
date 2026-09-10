@@ -231,13 +231,10 @@ export class MonacoLspBinding {
       const lineNum = input.options?.selection?.startLineNumber ?? 1;
       const openTab = useWorkspaceStore.getState().openTab;
       const title = filePath.split("/").pop() || filePath;
-      openTab({
-        id: `file-${filePath}`,
-        type: "file",
-        title,
-        key: filePath,
-        line: lineNum,
-      });
+      // Shares one identity with the file tree, search palette and context
+      // nodes now, so "go to definition" into an already-open file focuses
+      // that tab instead of opening a second copy of the same file.
+      openTab({ type: "file", path: filePath, title, line: lineNum });
       // Return the currently-focused editor so Monaco treats the jump as handled.
       return monaco.editor?.getFocusedEditor?.() ?? null;
     };

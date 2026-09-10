@@ -170,26 +170,16 @@ export const createCanvasSlice: WorkspaceSliceCreator = (set, get) => ({
   }),
 
   loadCanvasTab: (data) => {
-    const tabId: string = data.id || `canvas_${Date.now()}`;
+    // A saved canvas carries its own id, which is also its tab identity --
+    // see canvasTabIdentity for why that is deliberately unprefixed.
+    const existedBefore = data.id ? get().tabs.some((tab) => tab.id === data.id) : false;
+    const tabId = get().openTab({
+      type: "canvas",
+      canvasId: data.id,
+      title: data.title || "Untitled Pipeline",
+    });
+
     set((state) => {
-      const title = data.title || "Untitled Pipeline";
-      const newTab = { id: tabId, type: "canvas" as const, title, key: `canvas_${tabId}` };
-      let tabExists = false;
-      let targetGroupId = state.activeGroupId;
-      for (const group of state.editorGroups) {
-        if (group.openTabs.some((tab) => tab.id === tabId)) {
-          tabExists = true;
-          targetGroupId = group.id;
-          break;
-        }
-      }
-      const editorGroups = state.editorGroups.map((group) => group.id === targetGroupId
-        ? {
-            ...group,
-            openTabs: tabExists ? group.openTabs : [...group.openTabs, newTab],
-            activeTabId: tabId,
-          }
-        : group);
       const canvasContexts = {
         ...state.canvasContexts,
         [tabId]: {
@@ -203,13 +193,13 @@ export const createCanvasSlice: WorkspaceSliceCreator = (set, get) => ({
           isPipelineApplied: data.isPipelineApplied || false,
           contextNodesHidden: data.contextNodesHidden ?? false,
           contextRevealedTasks: data.contextRevealedTasks ?? [],
-          ...(!tabExists ? { hasBeenSaved: true } : {}),
+          // Freshly loaded from disk, so it is already saved. Re-loading a
+          // canvas that is already open must not clobber unsaved edits.
+          ...(!existedBefore ? { hasBeenSaved: true } : {}),
         },
       };
       const activeContext = canvasContexts[tabId];
       return {
-        editorGroups,
-        activeGroupId: targetGroupId,
         canvasContexts,
         nodes: activeContext.nodes,
         edges: activeContext.edges,
@@ -219,27 +209,9 @@ export const createCanvasSlice: WorkspaceSliceCreator = (set, get) => ({
         edgeReconciliationStatus: activeContext.edgeReconciliationStatus,
       };
     });
+
     return tabId;
   },
-
-  createCanvasTab: (title) => set((state) => {
-    const tabId = `canvas_${Date.now()}`;
-    const name = title || `Pipeline ${Object.keys(state.canvasContexts || {}).length + 1}`;
-    const newTab = { id: tabId, type: "canvas" as const, title: name, key: `canvas_${tabId}` };
-    const editorGroups = state.editorGroups.map((group) => group.id === state.activeGroupId
-      ? { ...group, openTabs: [...group.openTabs, newTab], activeTabId: tabId }
-      : group);
-    return {
-      editorGroups,
-      canvasContexts: { ...state.canvasContexts, [tabId]: createEmptyCanvasContext() },
-      nodes: [],
-      edges: [],
-      nodeLogs: {},
-      nodeStatus: {},
-      globalChatHistory: {},
-      edgeReconciliationStatus: {},
-    };
-  }),
 
   addContextNode: (x, y, fileContext, tabId) => set((state) => {
     const targetTabId = tabId || getActiveCanvasTabId(state);

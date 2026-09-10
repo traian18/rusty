@@ -172,12 +172,10 @@ const SourceControl: React.FC = () => {
   /** Open the full commit graph tab. */
   const handleOpenGraph = useCallback((): void => {
     openTab({
-      id: "git-history",
       type: "git-history",
-      title: "Git Graph",
-      key: "git-history",
+      repoPath: activeRepo,
     });
-  }, [openTab]);
+  }, [openTab, activeRepo]);
 
   /** Initialise a Git repository in the current folder. */
   const handleInitializeRepo = useCallback(async (): Promise<void> => {
@@ -477,19 +475,17 @@ const SourceControl: React.FC = () => {
   const handleOpenFileDiff = useCallback(
     (
       filePath: string,
-      fileName: string,
+      _fileName: string,
       diffType: "staged" | "unstaged",
     ): void => {
-      const titleSuffix = diffType === "staged" ? "Index" : "Workspace";
       openTab({
-        id: `git-diff-${filePath}-${diffType}`,
         type: "git-diff",
-        title: `${fileName} (${titleSuffix})`,
-        key: filePath,
+        repoPath: activeRepo,
+        path: filePath,
         diffType,
       });
     },
-    [openTab],
+    [openTab, activeRepo],
   );
 
   /** Switch the active repository. */

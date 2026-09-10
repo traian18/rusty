@@ -29,9 +29,12 @@ export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExec
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const updateTaskNode = useWorkspaceStore((state) => state.updateTaskNode);
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
+  // Declared before the selectors that close over it: the previous ordering
+  // read taskNodeId from its temporal dead zone, which only ever avoided
+  // throwing because nothing currently opens a task tab.
+  const taskNodeId = tab.taskNodeId;
   const chatHistory = useWorkspaceStore((state) => state.globalChatHistory[taskNodeId] || EMPTY_ARRAY);
 
-  const taskNodeId = tab.key;
   const taskNode = nodes.find((n) => n.id === taskNodeId);
   const rawNodeLogs = useWorkspaceStore((state) => state.nodeLogs[taskNodeId]);
   const nodeLogs = rawNodeLogs || EMPTY_ARRAY;

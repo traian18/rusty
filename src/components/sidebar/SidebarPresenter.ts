@@ -6,7 +6,7 @@ import { formatCompactTokenCount } from "../../services/tokenFormat";
 
 export type SidebarStoreState = Pick<
   WorkspaceState,
-  "openTab" | "createCanvasTab" | "createAgentTab" | "gitStatus" | "metricsTodayTotal"
+  "openTab" | "gitStatus" | "metricsTodayTotal"
 >;
 
 export interface SidebarIconItem {
@@ -35,12 +35,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Open Workspace",
     icon: FolderOpen,
     onClick: (store) => {
-      store.openTab({
-        id: "workspace_select",
-        type: "workspace",
-        title: "Workspaces",
-        key: "workspace",
-      });
+      store.openTab({ type: "workspace" });
     },
   },
   {
@@ -87,7 +82,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Rusty Canvas",
     icon: RustyIcon,
     onClick: (store) => {
-      store.createCanvasTab();
+      store.openTab({ type: "canvas" });
     },
   },
   {
@@ -95,7 +90,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Agent Mode",
     icon: Bot,
     onClick: (store) => {
-      store.createAgentTab();
+      store.openTab({ type: "agent" });
     },
   },
   {
@@ -103,12 +98,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "LLM Integrations",
     icon: Cpu,
     onClick: (store) => {
-      store.openTab({
-        id: "llm_setup",
-        type: "llm-setup",
-        title: "LLM Integrations",
-        key: "llm-setup",
-      });
+      store.openTab({ type: "llm-setup" });
     },
   },
   {
@@ -116,12 +106,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Skills",
     icon: Wand2,
     onClick: (store) => {
-      store.openTab({
-        id: "skills",
-        type: "skills",
-        title: "Skills",
-        key: "skills",
-      });
+      store.openTab({ type: "skills" });
     },
   },
   {
@@ -129,12 +114,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "MCP Integration",
     icon: Plug,
     onClick: (store) => {
-      store.openTab({
-        id: "mcp-integration",
-        type: "mcp-integration",
-        title: "MCP Integration",
-        key: "mcp-integration",
-      });
+      store.openTab({ type: "mcp-integration" });
     },
   },
   {
@@ -142,12 +122,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Rusty Guide",
     icon: BookOpen,
     onClick: (store) => {
-      store.openTab({
-        id: "welcome",
-        type: "onboarding",
-        title: "Welcome to Rusty",
-        key: "onboarding",
-      });
+      store.openTab({ type: "onboarding" });
     },
   },
   {
@@ -156,12 +131,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     icon: Gauge,
     badgeText: (store) => store.metricsTodayTotal > 0 ? formatCompactTokenCount(store.metricsTodayTotal) : undefined,
     onClick: (store) => {
-      store.openTab({
-        id: "metrics",
-        type: "metrics",
-        title: "Token Metrics",
-        key: "metrics",
-      });
+      store.openTab({ type: "metrics" });
     },
   },
   {
@@ -169,12 +139,7 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     label: "Settings",
     icon: Settings,
     onClick: (store) => {
-      store.openTab({
-        id: "settings",
-        type: "settings",
-        title: "Settings",
-        key: "settings",
-      });
+      store.openTab({ type: "settings" });
     },
   },
 ];

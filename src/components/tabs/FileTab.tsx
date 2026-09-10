@@ -73,28 +73,28 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   const openTab = useWorkspaceStore((state) => state.openTab);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
 
-  const isMarkdown = getFileTypeDetails(tab.key).language === "markdown";
+  const isMarkdown = getFileTypeDetails(tab.path).language === "markdown";
 
   useEffect(() => {
     setMarkdownPreview(isMarkdown);
-  }, [isMarkdown, tab.key]);
+  }, [isMarkdown, tab.path]);
 
   const canvasTabId = useMemo(() => {
     const contexts = useWorkspaceStore.getState().canvasContexts;
     for (const tId in contexts) {
       const ctx = contexts[tId];
-      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.key));
+      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.path));
       if (hasNode) return tId;
     }
     return undefined;
-  }, [tab.key]);
+  }, [tab.path]);
 
   // Load Git blame details
   useEffect(() => {
-    if (!rootPath || !tab.key) return;
+    if (!rootPath || !tab.path) return;
     const fetchBlame = async () => {
       try {
-        const blameLines: any[] = await invoke("git_blame", { rootDir: rootPath, filePath: tab.key });
+        const blameLines: any[] = await invoke("git_blame", { rootDir: rootPath, filePath: tab.path });
         const map: Record<number, any> = {};
         let maxLen = 5;
         blameLines.forEach((line) => {
@@ -111,14 +111,14 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       }
     };
     fetchBlame();
-  }, [tab.key, rootPath]);
+  }, [tab.path, rootPath]);
 
   // Load content on mount
   useEffect(() => {
     const fetchFileContent = async () => {
       try {
-        console.log(`FileTab reading VFS path: ${tab.key}`);
-        const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.key);
+        console.log(`FileTab reading VFS path: ${tab.path}`);
+        const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.path);
         setFileContent(content);
       } catch (err: any) {
         console.error("FileTab failed to read VFS:", err);
@@ -142,30 +142,31 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       inlineChatCommandRef.current?.dispose();
       inlineChatCommandRef.current = null;
       // We render <Editor keepCurrentModel /> below, so @monaco-editor/react
-      // never disposes the shared Monaco model on unmount. (Its keepCurrentModel
-      // flag is captured at mount time inside a [] effect, which predates any
-      // split, so a conditional prop can't reliably cover the shared-model
-      // case — closing the original editor would still dispose the model and
-      // black out the split copy.) We own model lifecycle here: dispose the
-      // model only when this was the last editor group still showing the file.
-      // Let the Monaco React wrapper complete its passive unmount cleanup
-      // before touching a shared model. Disposing synchronously here races its
-      // internal cancellation tokens during a branch reset and causes the
-      // unhandled Monaco rejection reported by the browser.
+      // never disposes the Monaco model on unmount; we own that lifecycle here.
+      //
+      // The "still open elsewhere" check is a holdover from split editors,
+      // where one file could be mounted in two panes and closing either would
+      // black out the other. File identity is unique per path now, so it can
+      // no longer be true -- it is kept as cheap insurance rather than making
+      // disposal unconditional.
+      //
+      // The deferral is NOT about splits and must stay: disposing synchronously
+      // races the Monaco wrapper's internal cancellation tokens during a branch
+      // reset, producing an unhandled rejection.
       window.setTimeout(() => {
         const monaco = (window as any).monaco;
         if (!monaco) return;
-        const uri = monaco.Uri.parse(`file://${tab.key}`);
+        const uri = monaco.Uri.parse(`file://${tab.path}`);
         const model = monaco.editor.getModel(uri);
         const stillOpenElsewhere = useWorkspaceStore
           .getState()
-          .editorGroups.some((g) => g.openTabs.some((t) => t.key === tab.key));
+          .tabs.some((t) => t.type === "file" && t.path === tab.path);
         if (model && !model.isDisposed?.() && !stillOpenElsewhere) {
           model.dispose();
         }
       }, 0);
     };
-  }, [tab.key]);
+  }, [tab.path]);
 
   // Trigger editor layout when tab becomes active
   useEffect(() => {
@@ -188,7 +189,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        await invoke("write_file_disk", { path: tab.key, content: value });
+        await invoke("write_file_disk", { path: tab.path, content: value });
         console.log(`FileTab auto-saved: ${tab.title}`);
         useWorkspaceStore.getState().loadGitStatus(); // Reload git changes list
       } catch (err) {
@@ -198,12 +199,9 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   };
 
   const handleOpenFileHistory = () => {
-    openTab({
-      id: `git-history-${tab.key}`,
-      type: "git-history",
-      title: `History: ${tab.title}`,
-      key: tab.key,
-    });
+    // Repo-scoped now: the identity carries the repository, so the same file
+    // in two repositories no longer collides on one history tab.
+    openTab({ type: "git-history", path: tab.path });
   };
 
   const scrollToLine = (editor: any, lineNum: number) => {
@@ -241,8 +239,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
     if (!word.test(line)) return -1;
 
     let score = 10;
-    if (match.path === tab.key) score += 4;
-    if (match.line === currentLine && match.path === tab.key) score -= 8;
+    if (match.path === tab.path) score += 4;
+    if (match.line === currentLine && match.path === tab.path) score -= 8;
     if (new RegExp(`\\b(class|interface|enum|record|struct|trait|type)\\s+${escaped}\\b`).test(line)) score += 100;
     if (new RegExp(`\\b(function|def|fn|func)\\s+${escaped}\\s*\\(`).test(line)) score += 95;
     if (new RegExp(`\\b(public|private|protected|static|final|abstract|override|virtual|async|export|pub)\\b.*\\b${escaped}\\s*\\(`).test(line)) score += 90;
@@ -278,10 +276,9 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
   const openDefinitionCandidate = (candidate: DefinitionCandidate) => {
     openTab({
-      id: `file-${candidate.path}`,
       type: "file",
+      path: candidate.path,
       title: candidate.name,
-      key: candidate.path,
       line: candidate.line > 0 ? candidate.line : undefined,
     });
     setDefinitionMenu(null);
@@ -402,8 +399,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
           setInlineChat({
             position: { x, y },
             context: {
-              filePath: tab.key,
-              language: getEditorLanguage(tab.key),
+              filePath: tab.path,
+              language: getEditorLanguage(tab.path),
               fileContent: model.getValue(),
               selection: {
                 text: selectedText,
@@ -424,7 +421,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       // to markers, and installs the global openCodeEditor override that turns
       // cmd+click / F12 definition jumps into Rusty tab opens. All of this used
       // to be inline here and in lspService.registerEditor.
-      lspBindingRef.current = MonacoLspBinding.attach(editor, tab.key, {
+      lspBindingRef.current = MonacoLspBinding.attach(editor, tab.path, {
         onStatus: setLspStatus,
       });
     }
@@ -529,7 +526,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
         {/* Reveal in Tree Button */}
         <button
-          onClick={() => revealFileInTree(tab.key)}
+          onClick={() => revealFileInTree(tab.path)}
           className="bg-[var(--bg-sidebar)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-light)] hover:border-[var(--border-active)] p-1.5 rounded-md text-[10px] font-mono font-bold transition-all shadow-md cursor-pointer flex items-center space-x-1"
           title="Reveal in File Tree"
         >
@@ -611,8 +608,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       ) : (
         <Editor
           height="100%"
-          path={`file://${tab.key}`}
-          language={getEditorLanguage(tab.key)}
+          path={`file://${tab.path}`}
+          language={getEditorLanguage(tab.path)}
           theme="rusty-custom-theme"
           value={fileContent}
           onChange={handleEditorChange}

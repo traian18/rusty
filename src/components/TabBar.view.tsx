@@ -1,63 +1,35 @@
 import React, { RefObject } from "react";
-import { X, Cpu, Settings, GitCommit, ChevronDown, FolderOpen, Columns, Wand2, BookOpen } from "lucide-react";
-import { FileIcon } from "../services/fileTypeService";
-import { RustyIcon } from "./RustyIcon";
+import { X, ChevronDown } from "lucide-react";
+import { TabIcon, getTabView } from "../tabs/views";
+import type { TabInstance } from "../tabs/types";
 import styles from "./TabBar.module.css";
 
 interface TabBarViewProps {
-  groupId: string;
-  openTabs: any[];
+  openTabs: TabInstance[];
   activeTabId: string | null;
-  activeGroupId: string | null;
   dropdownOpen: boolean;
   setDropdownOpen: (open: boolean) => void;
-  setActiveTabId: (tabId: string, groupId: string) => void;
-  setActiveGroupId: (groupId: string) => void;
-  closeTab: (tabId: string, groupId: string) => void;
-  splitTab: (tabId: string, groupId: string) => void;
-  moveTab: (tabId: string, fromGroupId: string, toGroupId: string) => void;
+  activateTab: (tabId: string) => void;
+  closeTab: (tabId: string) => void;
   tabsContainerRef: RefObject<HTMLDivElement | null>;
 }
 
 export const TabBarView: React.FC<TabBarViewProps> = ({
-  groupId,
   openTabs,
   activeTabId,
-  activeGroupId,
   dropdownOpen,
   setDropdownOpen,
-  setActiveTabId,
-  setActiveGroupId,
+  activateTab,
   closeTab,
-  splitTab,
-  moveTab,
   tabsContainerRef,
 }) => {
   return (
-    <div
-      onClick={() => {
-        if (activeGroupId !== groupId) {
-          setActiveGroupId(groupId);
-        }
-      }}
-      className={`${styles.bar} ${activeGroupId === groupId ? styles.focused : ""}`}
-    >
+    <div className={styles.bar}>
       {/* Scrollable Tab Container */}
-      <div
-        ref={tabsContainerRef}
-        className={`${styles.tabs} scrollbar-none tabs-container`}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          const tabId = e.dataTransfer.getData("text/plain");
-          const fromGroupId = e.dataTransfer.getData("from-group-id");
-          if (tabId && fromGroupId && fromGroupId !== groupId) {
-            moveTab(tabId, fromGroupId, groupId);
-          }
-        }}
-      >
+      <div ref={tabsContainerRef} className={`${styles.tabs} scrollbar-none tabs-container`}>
         {openTabs.map((tab) => {
           const isActive = tab.id === activeTabId;
-          const isFocusedGroup = activeGroupId === groupId;
+          const surface = getTabView(tab.type).surface;
 
           return (
             <div
@@ -65,116 +37,21 @@ export const TabBarView: React.FC<TabBarViewProps> = ({
               data-tab-id={tab.id}
               onClick={(e) => {
                 e.stopPropagation();
-                setActiveTabId(tab.id, groupId);
-                setActiveGroupId(groupId);
-              }}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/plain", tab.id);
-                e.dataTransfer.setData("from-group-id", groupId);
+                activateTab(tab.id);
               }}
               className={`${styles.tab} ${
-                isActive ? (tab.type === "canvas" ? styles.activeCanvas : styles.activeEditor) : ""
+                isActive ? (surface === "canvas" ? styles.activeCanvas : styles.activeEditor) : ""
               }`}
             >
-              {/* Top Accent Line for Active Tab of Active Group */}
-              {isActive && (
-                <div className={`${styles.accent} ${isFocusedGroup ? styles.accentFocused : ""}`} />
-              )}
+              {isActive && <div className={styles.accent} />}
 
-              {tab.type === "canvas" && (
-                <RustyIcon
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "file" && (
-                <FileIcon
-                  fileName={tab.title}
-                  size={11}
-                  className={styles.icon}
-                />
-              )}
-              {tab.type === "task" && (
-                <Cpu
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "llm-setup" && (
-                <Cpu
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "skills" && (
-                <Wand2
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "settings" && (
-                <Settings
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "git-history" && (
-                <GitCommit
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "git-diff" && (
-                <GitCommit
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "workspace" && (
-                <FolderOpen
-                  size={11}
-                  className={
-                    isActive
-                      ? styles.iconActive
-                      : styles.icon
-                  }
-                />
-              )}
-              {tab.type === "onboarding" && (
-                <BookOpen
-                  size={11}
-                  className={isActive ? styles.iconActive : styles.icon}
-                />
-              )}
+              {/* One registry-driven icon, rather than a per-type chain that
+                  silently had no branch for mcp-integration or metrics. */}
+              <TabIcon
+                tab={tab}
+                size={11}
+                className={isActive ? styles.iconActive : styles.icon}
+              />
 
               <span className={styles.title}>{tab.title}</span>
 
@@ -182,17 +59,7 @@ export const TabBarView: React.FC<TabBarViewProps> = ({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    splitTab(tab.id, groupId);
-                  }}
-                  className={styles.iconButton}
-                  title="Split editor"
-                >
-                  <Columns size={10} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeTab(tab.id, groupId);
+                    closeTab(tab.id);
                   }}
                   className={styles.iconButton}
                   title="Close tab"
@@ -221,44 +88,29 @@ export const TabBarView: React.FC<TabBarViewProps> = ({
         {dropdownOpen && (
           <>
             {/* Click-away backdrop overlay */}
-            <div
-              className={styles.backdrop}
-              onClick={() => setDropdownOpen(false)}
-            />
+            <div className={styles.backdrop} onClick={() => setDropdownOpen(false)} />
             <div className={styles.menu}>
-              <div className={styles.menuTitle}>
-                Open Editors
-              </div>
+              <div className={styles.menuTitle}>Open Editors</div>
               {openTabs.map((tab) => {
                 const isActive = tab.id === activeTabId;
                 return (
                   <div
                     key={tab.id}
                     onClick={() => {
-                      setActiveTabId(tab.id, groupId);
+                      activateTab(tab.id);
                       setDropdownOpen(false);
                     }}
                     className={`${styles.menuRow} ${isActive ? styles.menuRowActive : ""}`}
                   >
                     <div className={styles.menuIdentity}>
-                      {tab.type === "canvas" && <RustyIcon size={11} />}
-                      {tab.type === "file" && (
-                        <FileIcon fileName={tab.title} size={11} />
-                      )}
-                      {tab.type === "task" && <Cpu size={11} />}
-                      {tab.type === "llm-setup" && <Cpu size={11} />}
-                      {tab.type === "settings" && <Settings size={11} />}
-                      {tab.type === "git-history" && <GitCommit size={11} />}
-                      {tab.type === "git-diff" && <GitCommit size={11} />}
-                      {tab.type === "workspace" && <FolderOpen size={11} />}
-                      {tab.type === "onboarding" && <BookOpen size={11} />}
+                      <TabIcon tab={tab} size={11} />
                       <span className={styles.title}>{tab.title}</span>
                     </div>
 
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        closeTab(tab.id, groupId);
+                        closeTab(tab.id);
                         if (openTabs.length <= 1) {
                           setDropdownOpen(false);
                         }

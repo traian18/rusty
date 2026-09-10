@@ -5,22 +5,15 @@ export const createAgentSlice: WorkspaceSliceCreator = (set) => ({
   agentStreams: {},
   agentPermissionRequests: {},
 
-  createAgentTab: (title) => set((state) => {
-    const tabId = `agent_${Date.now()}`;
-    const name = title || `Agent ${Object.keys(state.agentChats || {}).length + 1}`;
-    const editorGroups = state.editorGroups.map((group) => group.id === state.activeGroupId
-      ? {
-          ...group,
-          openTabs: [...group.openTabs, { id: tabId, type: "agent" as const, title: name, key: tabId }],
-          activeTabId: tabId,
-        }
-      : group);
-    return { editorGroups, agentChats: { ...state.agentChats, [tabId]: [] } };
+  addAgentMessage: (tabId, message) => set((state) => {
+    // An agent tab's WebSocket is torn down on unmount, which happens after
+    // the tab (and its chat) have already been pruned. Without this guard a
+    // late message would recreate the key, and the next agent tab -- which
+    // reuses the same singleton id -- would inherit the orphaned history.
+    const existing = state.agentChats[tabId];
+    if (!existing) return {};
+    return { agentChats: { ...state.agentChats, [tabId]: [...existing, message] } };
   }),
-
-  addAgentMessage: (tabId, message) => set((state) => ({
-    agentChats: { ...state.agentChats, [tabId]: [...(state.agentChats[tabId] || []), message] },
-  })),
 
   updateAgentMessage: (tabId, messageId, content) => set((state) => ({
     agentChats: {
@@ -31,17 +24,19 @@ export const createAgentSlice: WorkspaceSliceCreator = (set) => ({
     },
   })),
 
-  setAgentMessages: (tabId, messages) => set((state) => ({
-    agentChats: { ...state.agentChats, [tabId]: messages },
-  })),
+  setAgentMessages: (tabId, messages) => set((state) => {
+    if (!state.agentChats[tabId]) return {};
+    return { agentChats: { ...state.agentChats, [tabId]: messages } };
+  }),
 
   clearAgentMessages: (tabId) => set((state) => ({
     agentChats: { ...state.agentChats, [tabId]: [] },
   })),
 
-  updateAgentStream: (tabId, content) => set((state) => ({
-    agentStreams: { ...state.agentStreams, [tabId]: content },
-  })),
+  updateAgentStream: (tabId, content) => set((state) => {
+    if (!state.agentChats[tabId]) return {};
+    return { agentStreams: { ...state.agentStreams, [tabId]: content } };
+  }),
 
   clearAgentStream: (tabId) => set((state) => {
     const agentStreams = { ...state.agentStreams };
@@ -49,12 +44,15 @@ export const createAgentSlice: WorkspaceSliceCreator = (set) => ({
     return { agentStreams };
   }),
 
-  addAgentPermissionRequest: (tabId, request) => set((state) => ({
-    agentPermissionRequests: {
-      ...state.agentPermissionRequests,
-      [tabId]: [...(state.agentPermissionRequests[tabId] || []), request],
-    },
-  })),
+  addAgentPermissionRequest: (tabId, request) => set((state) => {
+    if (!state.agentChats[tabId]) return {};
+    return {
+      agentPermissionRequests: {
+        ...state.agentPermissionRequests,
+        [tabId]: [...(state.agentPermissionRequests[tabId] || []), request],
+      },
+    };
+  }),
 
   resolveAgentPermission: (tabId, requestId, approved) => set((state) => ({
     agentPermissionRequests: {

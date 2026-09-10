@@ -551,12 +551,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
 
           files.forEach((filePath: string) => {
             const fileName = filePath.split("/").pop() || filePath;
-            openTab({
-              id: `file_${filePath.replace(/[^a-zA-Z0-9]/g, "_")}`,
-              type: "file",
-              title: fileName,
-              key: filePath,
-            });
+            openTab({ type: "file", path: filePath, title: fileName });
           });
 
           if (files.length > 0 && rootPath) {
@@ -691,12 +686,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
 
   const handleOpenModifiedFile = (filePath: string) => {
     const fileName = filePath.split("/").pop() || filePath;
-    openTab({
-      id: `file_${filePath.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      type: "file",
-      title: fileName,
-      key: filePath,
-    });
+    openTab({ type: "file", path: filePath, title: fileName });
   };
 
   const saveChatHistory = async () => {

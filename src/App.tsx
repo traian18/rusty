@@ -276,9 +276,7 @@ function App() {
         e.preventDefault();
         e.stopPropagation();
 
-        const state = useWorkspaceStore.getState();
-        const activeGroup = state.editorGroups.find((g) => g.id === state.activeGroupId);
-        const currentActive = activeGroup?.activeTabId;
+        const currentActive = useWorkspaceStore.getState().activeTabId;
         if (currentActive) {
           // Goes through the shared close channel rather than the raw store
           // action, so the unsaved/running guards apply to the keyboard path

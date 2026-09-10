@@ -36,7 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const setFileTree = useWorkspaceStore((state) => state.setFileTree);
   const activeTabId = useWorkspaceStore(selectActiveTabId);
   const activeTab = useWorkspaceStore(selectActiveTab);
-  const isActiveTabCanvas = activeTab?.type === "canvas" || activeTab?.type === "rusty";
+  const isActiveTabCanvas = activeTab?.type === "canvas";
   const toggleExplorerShortcut = useWorkspaceStore((state) => state.keyboardShortcuts.toggleExplorer);
 
   const helpers: SidebarHelpers = {
@@ -103,8 +103,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const store = useWorkspaceStore(useShallow((state) => ({
     openTab: state.openTab,
-    createCanvasTab: state.createCanvasTab,
-    createAgentTab: state.createAgentTab,
     gitStatus: state.gitStatus,
     metricsTodayTotal: state.metricsTodayTotal,
   })));

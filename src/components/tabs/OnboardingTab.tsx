@@ -273,7 +273,6 @@ const HeroGraph: React.FC = () => (
 export const OnboardingTab: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const openTab = useWorkspaceStore((state) => state.openTab);
-  const createCanvasTab = useWorkspaceStore((state) => state.createCanvasTab);
 
   // package.json's version drifts from the app's real version (tauri.conf.json,
   // bumped per release) — read the actual running app version from Tauri instead.
@@ -284,10 +283,10 @@ export const OnboardingTab: React.FC = () => {
 
   const handleStart = () => {
     if (rootPath) {
-      createCanvasTab();
+      openTab({ type: "canvas" });
       return;
     }
-    openTab({ id: "workspace_select", type: "workspace", title: "Workspaces", key: "workspace" });
+    openTab({ type: "workspace" });
   };
 
   const scrollTo = (id: string) => {

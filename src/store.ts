@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { createAgentSlice } from "./store/slices/createAgentSlice";
 import { createCanvasSlice } from "./store/slices/createCanvasSlice";
-import { createEditorSlice } from "./store/slices/createEditorSlice";
+import { createTabsSlice } from "./store/slices/createTabsSlice";
 import { createGitSlice } from "./store/slices/createGitSlice";
 import { createIntegrationSlice } from "./store/slices/createIntegrationSlice";
 import { createMetricsSlice } from "./store/slices/createMetricsSlice";
@@ -16,7 +16,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((...args) => ({
   ...createWorkspaceSlice(...args),
   ...createGitSlice(...args),
   ...createTerminalSlice(...args),
-  ...createEditorSlice(...args),
+  ...createTabsSlice(...args),
   ...createCanvasSlice(...args),
   ...createAgentSlice(...args),
   ...createIntegrationSlice(...args),

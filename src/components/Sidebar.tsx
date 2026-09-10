@@ -1,5 +1,6 @@
 import React from "react";
 import { useWorkspaceStore } from "../store";
+import { selectActiveTab, selectActiveTabId } from "../store/tabSelectors";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { SIDEBAR_ICONS, SidebarHelpers } from "./sidebar/SidebarPresenter";
@@ -33,11 +34,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const fileTree = useWorkspaceStore((state) => state.fileTree);
   const setFileTree = useWorkspaceStore((state) => state.setFileTree);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
-  const activeGroup = editorGroups.find((g) => g.id === activeGroupId);
-  const activeTabId = activeGroup ? activeGroup.activeTabId : null;
-  const activeTab = activeGroup && activeGroup.openTabs.find((t) => t.id === activeTabId);
+  const activeTabId = useWorkspaceStore(selectActiveTabId);
+  const activeTab = useWorkspaceStore(selectActiveTab);
   const isActiveTabCanvas = activeTab?.type === "canvas" || activeTab?.type === "rusty";
   const toggleExplorerShortcut = useWorkspaceStore((state) => state.keyboardShortcuts.toggleExplorer);
 

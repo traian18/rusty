@@ -16,6 +16,7 @@ import {
   EyeOff
 } from "lucide-react";
 import { useWorkspaceStore } from "../store";
+import { selectActiveFilePath, selectActiveTabId } from "../store/tabSelectors";
 import { FileIcon } from "../services/fileTypeService";
 import { invoke } from "@tauri-apps/api/core";
 import { MoveDialog } from "./MoveDialog";
@@ -103,8 +104,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
   const treeContainerRef = useRef<HTMLDivElement>(null);
   const revealPath = useWorkspaceStore((state) => state.revealPath);
   const clearRevealPath = useWorkspaceStore((state) => state.clearRevealPath);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
+  const activeFilePath = useWorkspaceStore(selectActiveFilePath);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
  
   const { confirm, ConfirmModalComponent } = useConfirm();
@@ -392,10 +392,8 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
         <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wide">Files</span>
         <button
           onClick={() => {
-            const activeGroup = editorGroups.find((g) => g.id === activeGroupId);
-            const activeTab = activeGroup?.openTabs.find((t) => t.id === activeGroup.activeTabId);
-            if (activeTab?.key) {
-              revealFileInTree(activeTab.key);
+            if (activeFilePath) {
+              revealFileInTree(activeFilePath);
             }
           }}
           className="text-[9px] font-mono text-[var(--text-muted)] hover:text-[var(--text-light)] hover:bg-[var(--accent-bg)] px-1.5 py-0.5 rounded transition-colors cursor-pointer flex items-center space-x-1"
@@ -567,10 +565,7 @@ const FileTreeNode: React.FC<{
 }> = ({ node, onContextMenu, renamingPath, onRenameComplete, onCreateRequest, selectedPaths, focusedPath, onEntryClick, onDragSelection, onMovePaths }) => {
   const expandedPaths = useWorkspaceStore((state) => state.expandedPaths);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
-  const activeGroup = editorGroups.find((g) => g.id === activeGroupId);
-  const activeTabId = activeGroup ? activeGroup.activeTabId : null;
+  const activeTabId = useWorkspaceStore(selectActiveTabId);
 
   const [tempName, setTempName] = useState(node.name);
   const renameInputRef = useRef<HTMLInputElement>(null);

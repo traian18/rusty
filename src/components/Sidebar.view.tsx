@@ -2,24 +2,33 @@ import React from "react";
 import { ChevronLeft, FoldHorizontal, RefreshCw } from "lucide-react";
 import { FileTree } from "./FileTree";
 import { SourceControl } from "./SourceControl";
+import type { DrawerView } from "../preferences/shellLayout";
 import type {
-  SidebarHelpers,
   SidebarIconItem,
   SidebarStoreState,
 } from "./sidebar/SidebarPresenter";
 import styles from "./Sidebar.module.css";
 
+/**
+ * The rail's fixed width in the still-combined root (Sidebar hasn't split
+ * into NavigationRail + ContextDrawer yet). Temporary -- once the rail is a
+ * sibling component with its own CSS width, no JS needs this number. Kept in
+ * sync with `.dock`'s `width: 3.5rem` in Sidebar.module.css and with the
+ * identical constant in App.tsx's drag handlers; both are deleted together
+ * when the shell is split (REFACTOR_PLAN.md PR 2).
+ */
+export const RAIL_WIDTH = 56;
+
 interface SidebarViewProps {
-  sidebarWidth: number;
-  isExplorerOpen: boolean;
-  sidebarView: "explorer" | "git";
+  drawerOpen: boolean;
+  drawerView: DrawerView;
+  drawerWidth: number;
   fileTree: any[];
   containerRef?: React.RefObject<HTMLDivElement | null>;
   topIcons: SidebarIconItem[];
   helpIcon?: SidebarIconItem;
   settingsIcon?: SidebarIconItem;
   store: SidebarStoreState;
-  helpers: SidebarHelpers;
   isItemActive: (id: string) => boolean;
   handleRefreshExplorer: () => void;
   handleCollapseAllFolders: () => void;
@@ -28,16 +37,15 @@ interface SidebarViewProps {
 }
 
 export const SidebarView: React.FC<SidebarViewProps> = ({
-  sidebarWidth,
-  isExplorerOpen,
-  sidebarView,
+  drawerOpen,
+  drawerView,
+  drawerWidth,
   fileTree,
   containerRef,
   topIcons,
   helpIcon,
   settingsIcon,
   store,
-  helpers,
   isItemActive,
   handleRefreshExplorer,
   handleCollapseAllFolders,
@@ -48,10 +56,10 @@ export const SidebarView: React.FC<SidebarViewProps> = ({
     <div
       ref={containerRef}
       className={`${styles.root} side-pane`}
-      style={{ width: `${isExplorerOpen ? sidebarWidth : 56}px` }}
+      style={{ width: `${RAIL_WIDTH + (drawerOpen ? drawerWidth : 0)}px` }}
     >
       {/* 1. Left Icon Dock (Activity Bar) */}
-      <div className={`${styles.dock} ${!isExplorerOpen ? styles.dockCollapsed : ""}`}>
+      <div className={`${styles.dock} ${!drawerOpen ? styles.dockCollapsed : ""}`}>
         <div className={styles.dockGroup}>
           {topIcons.map((item) => {
             const Icon = item.icon;
@@ -63,7 +71,7 @@ export const SidebarView: React.FC<SidebarViewProps> = ({
                 key={item.id}
                 id={`sidebar-${item.id}`}
                 type="button"
-                onClick={() => item.onClick(store, helpers)}
+                onClick={() => item.onClick(store)}
                 className={`${styles.dockButton} ${active ? styles.dockButtonActive : ""}`}
                 aria-label={item.label}
               >
@@ -96,7 +104,7 @@ export const SidebarView: React.FC<SidebarViewProps> = ({
                 key={item.id}
                 id={`sidebar-${item.id}`}
                 type="button"
-                onClick={() => item.onClick(store, helpers)}
+                onClick={() => item.onClick(store)}
                 className={`${styles.dockButton} ${active ? styles.dockButtonActive : ""}`}
                 aria-label={item.label}
               >
@@ -111,9 +119,9 @@ export const SidebarView: React.FC<SidebarViewProps> = ({
       </div>
 
       {/* 2. Sidebar View Panel Container */}
-      {isExplorerOpen && (
+      {drawerOpen && (
         <div className={styles.panel}>
-          {sidebarView === "explorer" ? (
+          {drawerView === "explorer" ? (
             <>
               {/* Dynamic Explorer Sidebar Tree */}
               <div className={styles.explorer}>
@@ -165,7 +173,7 @@ export const SidebarView: React.FC<SidebarViewProps> = ({
       )}
 
       {/* Resizer Handle */}
-      {isExplorerOpen && (
+      {drawerOpen && (
         <div
           onMouseDown={onSidebarMouseDown}
           className={styles.resizer}

@@ -8,6 +8,7 @@ import type {
 import type { McpServerConfig } from "../components/mcp/types";
 import type { TypographyPreferences } from "../preferences/typography";
 import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences/shortcuts";
+import type { DrawerView } from "../preferences/shellLayout";
 import type { OpenTabRequest, TabInstance } from "../tabs/types";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -368,6 +369,26 @@ export interface WorkspaceState {
   addDevLog: (type: "log" | "error" | "warn" | "system", text: string) => void;
   clearDevLogs: () => void;
   setShowDevConsole: (show: boolean) => void;
+
+  /**
+   * Application-shell layout. `drawerOpen`/`drawerView`/`searchOpen` are
+   * session-only by design; only `drawerWidth` persists (see
+   * preferences/shellLayout.ts). `drawerWidth` initializes to a constant and
+   * is hydrated from localStorage only via `hydrateUi()`, called from
+   * AppBootstrapBoundary -- never at slice-creation time.
+   */
+  drawerOpen: boolean;
+  drawerView: DrawerView;
+  drawerWidth: number;
+  searchOpen: boolean;
+  hydrateUi: () => void;
+  /** Opens on `view`, or switches to it; closes if already open on `view`. */
+  toggleDrawerView: (view: DrawerView) => void;
+  /** Opens on `view`. Unlike `toggleDrawerView`, never closes an open drawer. */
+  openDrawer: (view: DrawerView) => void;
+  closeDrawer: () => void;
+  setDrawerWidth: (width: number) => void;
+  setSearchOpen: (open: boolean) => void;
 
   terminalTabs: { id: string; name: string; type: "dev-logs" | "local"; cwd?: string }[];
   activeTerminalTabId: string | null;

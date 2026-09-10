@@ -6,27 +6,16 @@ import { formatCompactTokenCount } from "../../services/tokenFormat";
 
 export type SidebarStoreState = Pick<
   WorkspaceState,
-  "openTab" | "gitStatus" | "metricsTodayTotal"
+  "openTab" | "gitStatus" | "metricsTodayTotal" | "toggleDrawerView"
 >;
 
 export interface SidebarIconItem {
   id: string;
   label: string;
   icon: React.ComponentType<any>;
-  onClick: (storeState: SidebarStoreState, helpers: SidebarHelpers) => void;
+  onClick: (storeState: SidebarStoreState) => void;
   badgeCount?: (storeState: SidebarStoreState) => number;
   badgeText?: (storeState: SidebarStoreState) => string | undefined;
-}
-
-export interface SidebarHelpers {
-  isExplorerOpen: boolean;
-  setIsExplorerOpen: (open: boolean) => void;
-  sidebarView: "explorer" | "git";
-  setSidebarView: (view: "explorer" | "git") => void;
-  sidebarWidth: number;
-  setSidebarWidth: (width: number) => void;
-  lastWidth: number;
-  setLastWidth: (width: number) => void;
 }
 
 export const SIDEBAR_ICONS: SidebarIconItem[] = [
@@ -42,18 +31,8 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     id: "explorer",
     label: "Files",
     icon: Files,
-    onClick: (_store, helpers) => {
-      if (!helpers.isExplorerOpen) {
-        helpers.setSidebarView("explorer");
-        helpers.setSidebarWidth(helpers.lastWidth);
-        helpers.setIsExplorerOpen(true);
-      } else if (helpers.sidebarView === "explorer") {
-        helpers.setLastWidth(helpers.sidebarWidth);
-        helpers.setSidebarWidth(56);
-        helpers.setIsExplorerOpen(false);
-      } else {
-        helpers.setSidebarView("explorer");
-      }
+    onClick: (store) => {
+      store.toggleDrawerView("explorer");
     },
   },
   {
@@ -63,18 +42,8 @@ export const SIDEBAR_ICONS: SidebarIconItem[] = [
     badgeCount: (store) => {
       return store.gitStatus ? store.gitStatus.staged.length + store.gitStatus.unstaged.length : 0;
     },
-    onClick: (_store, helpers) => {
-      if (!helpers.isExplorerOpen) {
-        helpers.setSidebarView("git");
-        helpers.setSidebarWidth(helpers.lastWidth);
-        helpers.setIsExplorerOpen(true);
-      } else if (helpers.sidebarView === "git") {
-        helpers.setLastWidth(helpers.sidebarWidth);
-        helpers.setSidebarWidth(56);
-        helpers.setIsExplorerOpen(false);
-      } else {
-        helpers.setSidebarView("git");
-      }
+    onClick: (store) => {
+      store.toggleDrawerView("git");
     },
   },
   {

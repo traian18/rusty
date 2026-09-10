@@ -20,7 +20,7 @@
     "fmt:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "prelint:rust": "node scripts/fetch-sidecar-node-runtime.mjs && node scripts/ensure-sidecar-resources.mjs",
     "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
-    "verify": "npm run typecheck:test && npm run test && npm run build && npm run typecheck:sidecar && npm run test:sidecar && npm run test:rust",
+    "verify": "npm run typecheck:test && npm run theme:check && npm run test && npm run build && npm run typecheck:sidecar && npm run test:sidecar && npm run test:rust",
     "theme:check": "node scripts/check-theme-usage.mjs",
     "icons:generate": "tauri icon public/rusty-dark.png && node scripts/prune-mobile-icons.mjs",
     "build:sidecar": "npm --prefix agent-sidecar run build && node scripts/prepare-sidecar-runtime.mjs",

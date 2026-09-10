@@ -22,17 +22,23 @@
   --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
+  /* Application-shell surfaces only (the single outer card). Scale: sm =
+     inline controls, md = buttons/inputs, lg = tabs/menus/cards-in-content,
+     xl = the shell card. */
+  --radius-xl: 1rem;
   --control-height-sm: 1.75rem;
   --control-height-md: 2.25rem;
   --shadow-elevated: 0 12px 32px color-mix(in srgb, var(--color-surface-overlay) 48%, transparent);
   --z-modal: 9999;
   --motion-fast: 120ms;
   --motion-normal: 200ms;
+  --motion-tooltip-delay: 350ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-fast: 0ms;
     --motion-normal: 0ms;
+    --motion-tooltip-delay: 0ms;
   }
 }

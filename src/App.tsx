@@ -8,7 +8,13 @@ import { SearchPalette } from "./components/SearchPalette";
 import { AlertModal } from "./components/AlertModal";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { matchesShortcut } from "./preferences/shortcuts";
+import { clampDrawerWidth } from "./preferences/shellLayout";
 import styles from "./App.module.css";
+
+// Mirrors Sidebar.view.tsx's RAIL_WIDTH -- see the comment there. Both are
+// deleted together once the rail becomes an independent NavigationRail with
+// its own CSS width (REFACTOR_PLAN.md PR 2).
+const RAIL_WIDTH = 56;
 
 const MAX_CONSOLE_ARGUMENT_LENGTH = 2_000;
 const MAX_CONSOLE_ENTRY_LENGTH = 8_000;
@@ -54,53 +60,29 @@ function App() {
   const keyboardShortcuts = useWorkspaceStore((state) => state.keyboardShortcuts);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const stored = localStorage.getItem("sidebar_width");
-    if (stored) {
-      const val = parseInt(stored, 10);
-      if (!isNaN(val) && val >= 200 && val <= 600) {
-        return val;
-      }
-    }
-    return 320;
-  });
+  const drawerWidth = useWorkspaceStore((state) => state.drawerWidth);
+  const setDrawerWidth = useWorkspaceStore((state) => state.setDrawerWidth);
 
-  const [isSidebarExplorerOpen, setIsSidebarExplorerOpen] = useState(true);
-  const [sidebarView, setSidebarView] = useState<"explorer" | "git">("explorer");
-  const [lastSidebarWidth, setLastSidebarWidth] = useState(320);
+  // Hydrates drawerWidth from localStorage. Temporary here -- this moves into
+  // AppBootstrapBoundary once that component exists, so it runs before the
+  // shell's first paint instead of after.
+  useEffect(() => {
+    useWorkspaceStore.getState().hydrateUi();
+  }, []);
 
   useEffect(() => {
     const handleReveal = () => {
-      setSidebarView("explorer");
-      setIsSidebarExplorerOpen(true);
-      if (sidebarWidthRef.current <= 56) {
-        const targetWidth = lastSidebarWidth > 56 ? lastSidebarWidth : 320;
-        setSidebarWidth(targetWidth);
-        sidebarWidthRef.current = targetWidth;
-        if (sidebarElementRef.current) {
-          sidebarElementRef.current.style.width = `${targetWidth}px`;
-        }
-      }
+      useWorkspaceStore.getState().openDrawer("explorer");
     };
     window.addEventListener("reveal-file-in-tree", handleReveal);
     return () => window.removeEventListener("reveal-file-in-tree", handleReveal);
-  }, [lastSidebarWidth]);
+  }, []);
 
   const toggleExplorer = useCallback(() => {
-    if (!isSidebarExplorerOpen) {
-      setSidebarView("explorer");
-      setSidebarWidth(lastSidebarWidth);
-      setIsSidebarExplorerOpen(true);
-    } else if (sidebarView === "explorer") {
-      setLastSidebarWidth(sidebarWidth);
-      setSidebarWidth(56);
-      setIsSidebarExplorerOpen(false);
-    } else {
-      setSidebarView("explorer");
-    }
-  }, [isSidebarExplorerOpen, sidebarView, sidebarWidth, lastSidebarWidth]);
+    useWorkspaceStore.getState().toggleDrawerView("explorer");
+  }, []);
   const isSidebarDraggingRef = useRef(false);
-  const sidebarWidthRef = useRef(sidebarWidth);
+  const sidebarWidthRef = useRef(drawerWidth);
   const sidebarElementRef = useRef<HTMLDivElement>(null);
 
   const handleSidebarMouseMove = useCallback((moveEvent: MouseEvent) => {
@@ -108,11 +90,11 @@ function App() {
     const startX = (isSidebarDraggingRef as any)._startX as number;
     const startWidth = (isSidebarDraggingRef as any)._startWidth as number;
     const dx = moveEvent.clientX - startX;
-    const newWidth = Math.max(200, Math.min(600, startWidth + dx));
+    const newWidth = clampDrawerWidth(startWidth + dx);
     sidebarWidthRef.current = newWidth;
     // Directly mutate DOM — no React re-render
     if (sidebarElementRef.current) {
-      sidebarElementRef.current.style.width = `${newWidth}px`;
+      sidebarElementRef.current.style.width = `${RAIL_WIDTH + newWidth}px`;
     }
   }, []);
 
@@ -122,9 +104,9 @@ function App() {
     document.removeEventListener("mouseup", handleSidebarMouseUp);
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
-    // Commit the final width to React state once
-    setSidebarWidth(sidebarWidthRef.current);
-  }, [handleSidebarMouseMove]);
+    // Commit the final width once. setDrawerWidth clamps and persists.
+    setDrawerWidth(sidebarWidthRef.current);
+  }, [handleSidebarMouseMove, setDrawerWidth]);
 
   const handleSidebarMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -137,14 +119,10 @@ function App() {
     document.addEventListener("mouseup", handleSidebarMouseUp);
   }, [handleSidebarMouseMove, handleSidebarMouseUp]);
 
-  // Keep widthRef in sync when state changes (e.g. from collapse/expand buttons)
-  // and save active sidebar width if expanded
+  // Keep widthRef in sync when drawerWidth changes elsewhere (e.g. hydration).
   useEffect(() => {
-    sidebarWidthRef.current = sidebarWidth;
-    if (sidebarWidth > 56) {
-      localStorage.setItem("sidebar_width", String(sidebarWidth));
-    }
-  }, [sidebarWidth]);
+    sidebarWidthRef.current = drawerWidth;
+  }, [drawerWidth]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -317,16 +295,8 @@ function App() {
       <div className={styles.workbench}>
         {/* Sidebar with explorer and icon dock */}
         <Sidebar
-          sidebarWidth={sidebarWidth}
-          setSidebarWidth={setSidebarWidth}
           onSidebarMouseDown={handleSidebarMouseDown}
           containerRef={sidebarElementRef}
-          isExplorerOpen={isSidebarExplorerOpen}
-          setIsExplorerOpen={setIsSidebarExplorerOpen}
-          sidebarView={sidebarView}
-          setSidebarView={setSidebarView}
-          lastWidth={lastSidebarWidth}
-          setLastWidth={setLastSidebarWidth}
         />
 
         {/* Main Workspace Card Panel */}

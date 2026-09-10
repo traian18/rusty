@@ -3,52 +3,26 @@ import { useWorkspaceStore } from "../store";
 import { selectActiveTab, selectActiveTabId } from "../store/tabSelectors";
 import { useShallow } from "zustand/react/shallow";
 import { invoke } from "@tauri-apps/api/core";
-import { SIDEBAR_ICONS, SidebarHelpers } from "./sidebar/SidebarPresenter";
+import { SIDEBAR_ICONS } from "./sidebar/SidebarPresenter";
 import { SidebarView } from "./Sidebar.view";
 import { formatShortcut } from "../preferences/shortcuts";
 
 interface SidebarProps {
-  sidebarWidth: number;
-  setSidebarWidth: (width: number) => void;
-  onSidebarMouseDown: (e: React.MouseEvent) => void;
   containerRef?: React.RefObject<HTMLDivElement | null>;
-  isExplorerOpen: boolean;
-  setIsExplorerOpen: (open: boolean) => void;
-  sidebarView: "explorer" | "git";
-  setSidebarView: (view: "explorer" | "git") => void;
-  lastWidth: number;
-  setLastWidth: (width: number) => void;
+  onSidebarMouseDown: (e: React.MouseEvent) => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
-  sidebarWidth,
-  setSidebarWidth,
-  onSidebarMouseDown,
-  containerRef,
-  isExplorerOpen,
-  setIsExplorerOpen,
-  sidebarView,
-  setSidebarView,
-  lastWidth,
-  setLastWidth,
-}) => {
+export const Sidebar: React.FC<SidebarProps> = ({ containerRef, onSidebarMouseDown }) => {
   const fileTree = useWorkspaceStore((state) => state.fileTree);
   const setFileTree = useWorkspaceStore((state) => state.setFileTree);
   const activeTabId = useWorkspaceStore(selectActiveTabId);
   const activeTab = useWorkspaceStore(selectActiveTab);
   const isActiveTabCanvas = activeTab?.type === "canvas";
   const toggleExplorerShortcut = useWorkspaceStore((state) => state.keyboardShortcuts.toggleExplorer);
-
-  const helpers: SidebarHelpers = {
-    isExplorerOpen,
-    setIsExplorerOpen,
-    sidebarView,
-    setSidebarView,
-    sidebarWidth,
-    setSidebarWidth,
-    lastWidth,
-    setLastWidth,
-  };
+  const drawerOpen = useWorkspaceStore((state) => state.drawerOpen);
+  const drawerView = useWorkspaceStore((state) => state.drawerView);
+  const drawerWidth = useWorkspaceStore((state) => state.drawerWidth);
+  const closeDrawer = useWorkspaceStore((state) => state.closeDrawer);
 
   const handleCollapseAllFolders = () => {
     useWorkspaceStore.getState().collapseAllFolders();
@@ -66,26 +40,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const handleCollapseSidebar = () => {
-    setLastWidth(sidebarWidth);
-    setSidebarWidth(56);
-    setIsExplorerOpen(false);
-  };
-
   const isItemActive = (id: string) => {
     switch (id) {
       case "workspace":
-        return activeTabId === "workspace_select";
+        return activeTabId === "workspace";
       case "explorer":
-        return isExplorerOpen && sidebarView === "explorer";
+        return drawerOpen && drawerView === "explorer";
       case "git":
-        return isExplorerOpen && sidebarView === "git";
+        return drawerOpen && drawerView === "git";
       case "rusty":
         return isActiveTabCanvas;
       case "agent":
         return activeTab?.type === "agent";
       case "llm-setup":
-        return activeTabId === "llm_setup" || activeTabId === "llm-setup";
+        return activeTabId === "llm-setup";
       case "skills":
         return activeTabId === "skills";
       case "mcp":
@@ -105,6 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     openTab: state.openTab,
     gitStatus: state.gitStatus,
     metricsTodayTotal: state.metricsTodayTotal,
+    toggleDrawerView: state.toggleDrawerView,
   })));
   const topIcons = SIDEBAR_ICONS
     .filter((item) => item.id !== "settings" && item.id !== "onboarding")
@@ -116,20 +85,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <SidebarView
-      sidebarWidth={sidebarWidth}
-      isExplorerOpen={isExplorerOpen}
-      sidebarView={sidebarView}
+      drawerOpen={drawerOpen}
+      drawerView={drawerView}
+      drawerWidth={drawerWidth}
       fileTree={fileTree}
       containerRef={containerRef}
       topIcons={topIcons}
       helpIcon={helpIcon}
       settingsIcon={settingsIcon}
       store={store}
-      helpers={helpers}
       isItemActive={isItemActive}
       handleRefreshExplorer={handleRefreshExplorer}
       handleCollapseAllFolders={handleCollapseAllFolders}
-      handleCollapseSidebar={handleCollapseSidebar}
+      handleCollapseSidebar={closeDrawer}
       onSidebarMouseDown={onSidebarMouseDown}
     />
   );

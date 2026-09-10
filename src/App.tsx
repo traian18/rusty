@@ -8,6 +8,7 @@ import { AlertModal } from "./components/AlertModal";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { DevLogBridge } from "./components/shell/DevLogBridge";
 import { GlobalShortcuts } from "./components/shell/GlobalShortcuts";
+import { AppBootstrapBoundary } from "./components/shell/AppBootstrapBoundary";
 import { clampDrawerWidth } from "./preferences/shellLayout";
 import styles from "./App.module.css";
 
@@ -17,19 +18,11 @@ import styles from "./App.module.css";
 const RAIL_WIDTH = 56;
 
 function App() {
-  const initTerminalState = useWorkspaceStore((state) => state.initTerminalState);
   const searchOpen = useWorkspaceStore((state) => state.searchOpen);
   const setSearchOpen = useWorkspaceStore((state) => state.setSearchOpen);
 
   const drawerWidth = useWorkspaceStore((state) => state.drawerWidth);
   const setDrawerWidth = useWorkspaceStore((state) => state.setDrawerWidth);
-
-  // Hydrates drawerWidth from localStorage. Temporary here -- this moves into
-  // AppBootstrapBoundary once that component exists, so it runs before the
-  // shell's first paint instead of after.
-  useEffect(() => {
-    useWorkspaceStore.getState().hydrateUi();
-  }, []);
 
   useEffect(() => {
     const handleReveal = () => {
@@ -92,55 +85,40 @@ function App() {
     };
   }, [handleSidebarMouseMove, handleSidebarMouseUp]);
 
-  // Load secure configuration on startup
-  useEffect(() => {
-    useWorkspaceStore.getState().loadSecureConfig().then(() => {
-      const rootPath = useWorkspaceStore.getState().rootPath;
-      if (rootPath) {
-        useWorkspaceStore.getState().loadSkills().catch((err) => {
-          console.error("Failed to load skills on startup:", err);
-        });
-      }
-    }).catch((err) => {
-      console.error("Failed to load secure configuration on startup:", err);
-    });
-  }, []);
-
-  // Initialize terminal bar state
-  useEffect(() => {
-    initTerminalState(import.meta.env.DEV);
-  }, [initTerminalState]);
-
   return (
     <div className={`ide-typography-scope ${styles.app}`}>
       <DevLogBridge />
       <GlobalShortcuts />
 
-      {/* 1. Header Bar */}
-      <Header onSearchOpen={() => setSearchOpen(true)} />
+      <AppBootstrapBoundary>
+        {/* 1. Header Bar */}
+        <Header onSearchOpen={() => setSearchOpen(true)} />
 
-      {/* 2. Workspace Cards Content Area */}
-      <div className={styles.workbench}>
-        {/* Sidebar with explorer and icon dock */}
-        <Sidebar
-          onSidebarMouseDown={handleSidebarMouseDown}
-          containerRef={sidebarElementRef}
-        />
+        {/* 2. Workspace Cards Content Area */}
+        <div className={styles.workbench}>
+          {/* Sidebar with explorer and icon dock */}
+          <Sidebar
+            onSidebarMouseDown={handleSidebarMouseDown}
+            containerRef={sidebarElementRef}
+          />
 
-        {/* Main Workspace Card Panel */}
-        <div className={styles.workspace}>
-          {/* Workspace dynamic tabs and contents */}
-          <Workspace />
+          {/* Main Workspace Card Panel */}
+          <div className={styles.workspace}>
+            {/* Workspace dynamic tabs and contents */}
+            <Workspace />
 
-          {/* Collapsible Bottom Terminal Panel (Pinned Globally) */}
-          <TerminalPanel />
+            {/* Collapsible Bottom Terminal Panel (Pinned Globally) */}
+            <TerminalPanel />
+          </div>
         </div>
-      </div>
-      {/* Search Command Palette Overlay */}
-      {searchOpen && (
-        <SearchPalette onClose={() => setSearchOpen(false)} />
-      )}
-      {/* Global alert modal (replaces native alert()) */}
+        {/* Search Command Palette Overlay */}
+        {searchOpen && (
+          <SearchPalette onClose={() => setSearchOpen(false)} />
+        )}
+      </AppBootstrapBoundary>
+
+      {/* Global alert modal (replaces native alert()) -- stays outside the
+          boundary so a notify() during bootstrap still renders. */}
       <AlertModal />
     </div>
   );

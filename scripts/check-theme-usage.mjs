@@ -16,7 +16,8 @@ const forbidden = [
 ];
 const semanticCssModules = [
   /^App\.module\.css$/,
-  /^components\/shell\/AppBootstrapBoundary\.module\.css$/,
+  /^components\/shell\/(?:AppBootstrapBoundary|AppShell)\.module\.css$/,
+  /^components\/workspace\/MainWorkspace\.module\.css$/,
   /^components\/(?:Header|Sidebar|TabBar|TerminalPanel|LocalTerminal|SearchPalette|CustomSelect)\.module\.css$/,
   /^components\/settings\/.*\.module\.css$/,
   /^components\/tabs\/SettingsTab\.module\.css$/,
@@ -46,6 +47,8 @@ const semanticModuleForbidden = [
 const migratedJsxFiles = new Set([
   "App.tsx",
   "components/shell/AppBootstrapBoundary.view.tsx",
+  "components/shell/AppShell.view.tsx",
+  "components/workspace/MainWorkspace.tsx",
   "components/Header.view.tsx",
   "components/Sidebar.view.tsx",
   "components/TabBar.view.tsx",

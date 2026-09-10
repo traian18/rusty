@@ -1,0 +1,9 @@
+.workbench {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  gap: var(--space-3);
+  overflow: hidden;
+  padding: var(--space-1) var(--space-3) var(--space-3);
+}

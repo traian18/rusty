@@ -1,10 +1,10 @@
 import React, { RefObject } from "react";
 import { X, ChevronDown } from "lucide-react";
-import { TabIcon, getTabView } from "../tabs/views";
-import type { TabInstance } from "../tabs/types";
-import styles from "./TabBar.module.css";
+import { TabIcon, getTabView } from "../../tabs/views";
+import type { TabInstance } from "../../tabs/types";
+import styles from "./TabStrip.module.css";
 
-interface TabBarViewProps {
+interface TabStripViewProps {
   openTabs: TabInstance[];
   activeTabId: string | null;
   dropdownOpen: boolean;
@@ -14,7 +14,7 @@ interface TabBarViewProps {
   tabsContainerRef: RefObject<HTMLDivElement | null>;
 }
 
-export const TabBarView: React.FC<TabBarViewProps> = ({
+export const TabStripView: React.FC<TabStripViewProps> = ({
   openTabs,
   activeTabId,
   dropdownOpen,

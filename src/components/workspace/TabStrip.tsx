@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { useWorkspaceStore } from "../store";
-import { TabBarView } from "./TabBar.view";
-import { requestCloseTab } from "../tabs/closeRequests";
+import { useWorkspaceStore } from "../../store";
+import { TabStripView } from "./TabStrip.view";
+import { requestCloseTab } from "../../tabs/closeRequests";
 
-export const TabBar: React.FC = () => {
+export const TabStrip: React.FC = () => {
   const openTabs = useWorkspaceStore((state) => state.tabs);
   const activeTabId = useWorkspaceStore((state) => state.activeTabId);
   const activateTab = useWorkspaceStore((state) => state.activateTab);
@@ -28,7 +28,7 @@ export const TabBar: React.FC = () => {
   }, [activeTabId]);
 
   return (
-    <TabBarView
+    <TabStripView
       openTabs={openTabs}
       activeTabId={activeTabId}
       dropdownOpen={dropdownOpen}

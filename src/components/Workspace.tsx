@@ -4,11 +4,10 @@ import { resolveSkill, toSkillData, BUILT_IN_SKILL_IDS } from "../config/skillDe
 import { VfsRegistry, setExecutingNode } from "../services/vfs";
 import { notify } from "../notificationStore";
 import { onCloseTabRequest } from "../tabs/closeRequests";
-import { shouldKeepMounted } from "../tabs/policy";
 import { evaluateClose } from "../tabs/closeGuards";
-import { TabPanel, getTabView, type TabViewContext } from "../tabs/views";
-import { useShallow } from "zustand/react/shallow";
-import { TabBar } from "./TabBar";
+import type { TabViewContext } from "../tabs/views";
+import { TabStrip } from "./workspace/TabStrip";
+import { TabOutlet } from "./workspace/TabOutlet";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X, Save, HelpCircle } from "lucide-react";
 import { canvasFileService } from "./tabs/canvas/services/canvasFileService";
@@ -27,17 +26,6 @@ export const Workspace: React.FC = () => {
     type: "unsaved" | "running";
     title: string;
   } | null>(null);
-  const tabs = useWorkspaceStore((state) => state.tabs);
-  const activeTabId = useWorkspaceStore((state) => state.activeTabId);
-  // Subscribed rather than read imperatively during render: a canvas that
-  // starts running while inactive has to re-mount, and the previous
-  // getState() read inside the render loop never triggered that.
-  const keepMountedIds = useWorkspaceStore(
-    useShallow((state) =>
-      state.tabs.filter((tab) => shouldKeepMounted(tab, state)).map((tab) => tab.id),
-    ),
-  );
-
   const addLog = useWorkspaceStore((state) => state.addLog);
   const clearLogs = useWorkspaceStore((state) => state.clearLogs);
   const setNodeStatus = useWorkspaceStore((state) => state.setNodeStatus);
@@ -707,37 +695,12 @@ export const Workspace: React.FC = () => {
 
   const tabViewContext: TabViewContext = { executeNode, stopExecution };
 
-  const renderTabPanel = () => {
-    return tabs.map((tab) => {
-      const isActive = tab.id === activeTabId;
-      // Inactive tabs unmount unless their policy says otherwise. Kept-mounted
-      // panels are parked off-screen so their DOM, sockets and editor state
-      // survive without being visible.
-      const keepMounted = keepMountedIds.includes(tab.id);
-      if (!isActive && !keepMounted) return null;
-
-      const bgClass =
-        getTabView(tab.type).surface === "canvas" ? "bg-[var(--bg-canvas)]" : "bg-[var(--bg-editor)]";
-
-      return (
-        <div
-          key={tab.id}
-          className={`${isActive ? "w-full h-full" : "absolute -left-[99999px] top-0 w-full h-full"} ${bgClass} overflow-hidden`}
-        >
-          <TabPanel tab={tab} isActive={isActive} context={tabViewContext} />
-        </div>
-      );
-    });
-  };
-
   return (
     <div className="flex-1 flex h-full min-w-0 overflow-hidden relative bg-[var(--bg-editor)] workspace-container">
       <CommandPermissionPresenter />
       <div className="flex flex-col h-full w-full min-w-0 overflow-hidden">
-        <TabBar />
-        <div className="flex-1 min-h-0 relative bg-[var(--bg-editor)] overflow-hidden">
-          {renderTabPanel()}
-        </div>
+        <TabStrip />
+        <TabOutlet context={tabViewContext} />
       </div>
 
       {closeIntercept && closeIntercept.type === "running" && createPortal(

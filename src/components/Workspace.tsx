@@ -3,6 +3,7 @@ import { useWorkspaceStore } from "../store";
 import { resolveSkill, toSkillData, BUILT_IN_SKILL_IDS } from "../config/skillDefinitions";
 import { VfsRegistry, setExecutingNode } from "../services/vfs";
 import { notify } from "../notificationStore";
+import { onCloseTabRequest } from "../tabs/closeRequests";
 import { TabBar } from "./TabBar";
 import { RustyTab } from "./tabs/canvas/RustyTab";
 import { FileTab } from "./tabs/FileTab";
@@ -32,7 +33,9 @@ export const Workspace: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const [closeIntercept, setCloseIntercept] = useState<{
     tabId: string;
-    groupId: string;
+    // Optional: close requests arriving over the event channel carry only a
+    // tab id, and `closeTab` resolves the owning group itself when omitted.
+    groupId?: string;
     type: "unsaved" | "running";
     title: string;
   } | null>(null);
@@ -667,7 +670,7 @@ export const Workspace: React.FC = () => {
     }
   };
 
-  const handleCloseTab = (tabId: string, groupId: string) => {
+  const handleCloseTab = (tabId: string, groupId?: string) => {
     const tab = useWorkspaceStore.getState().editorGroups
       .flatMap((g) => g.openTabs)
       .find((t) => t.id === tabId);
@@ -713,6 +716,13 @@ export const Workspace: React.FC = () => {
     // No running processes or unsaved changes, close immediately
     useWorkspaceStore.getState().closeTab(tabId, groupId);
   };
+
+  // Every close affordance routes through here, so the unsaved/running guards
+  // apply uniformly. Before this channel existed, the close-active-tab
+  // keyboard shortcut in App.tsx called the raw store action and skipped them.
+  // Safe to subscribe once: handleCloseTab closes over nothing but
+  // `getState()` and the stable `setCloseIntercept` setter.
+  useEffect(() => onCloseTabRequest((tabId) => handleCloseTab(tabId)), []);
 
   const handleConfirmCloseRunning = async () => {
     if (!closeIntercept) return;
@@ -873,7 +883,7 @@ export const Workspace: React.FC = () => {
                 }
               }}
             >
-              <TabBar groupId={group.id} onCloseTab={handleCloseTab} />
+              <TabBar groupId={group.id} />
               <div className="flex-1 min-h-0 relative bg-[var(--bg-editor)] overflow-hidden">
                 {renderTabPanel(group.openTabs, group.activeTabId, group.id)}
               </div>

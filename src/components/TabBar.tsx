@@ -1,19 +1,18 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useWorkspaceStore } from "../store";
 import { TabBarView } from "./TabBar.view";
+import { requestCloseTab } from "../tabs/closeRequests";
 
 interface TabBarProps {
   groupId: string;
-  onCloseTab?: (tabId: string, groupId: string) => void;
 }
 
-export const TabBar: React.FC<TabBarProps> = ({ groupId, onCloseTab }) => {
+export const TabBar: React.FC<TabBarProps> = ({ groupId }) => {
   const group = useWorkspaceStore((state) => state.editorGroups.find((g) => g.id === groupId));
   const openTabs = group ? group.openTabs : [];
   const activeTabId = group ? group.activeTabId : null;
 
   const setActiveTabId = useWorkspaceStore((state) => state.setActiveTabId);
-  const closeTab = useWorkspaceStore((state) => state.closeTab);
   const splitTab = useWorkspaceStore((state) => state.splitTab);
   const moveTab = useWorkspaceStore((state) => state.moveTab);
   const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
@@ -48,7 +47,7 @@ export const TabBar: React.FC<TabBarProps> = ({ groupId, onCloseTab }) => {
       setDropdownOpen={setDropdownOpen}
       setActiveTabId={setActiveTabId}
       setActiveGroupId={setActiveGroupId}
-      closeTab={onCloseTab || closeTab}
+      closeTab={(tabId) => requestCloseTab(tabId)}
       splitTab={splitTab}
       moveTab={moveTab}
       tabsContainerRef={tabsContainerRef}

@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { Workspace } from "./components/Workspace";
 import { useWorkspaceStore } from "./store";
+import { requestCloseTab } from "./tabs/closeRequests";
 import { SearchPalette } from "./components/SearchPalette";
 import { AlertModal } from "./components/AlertModal";
 import { TerminalPanel } from "./components/TerminalPanel";
@@ -279,8 +280,10 @@ function App() {
         const activeGroup = state.editorGroups.find((g) => g.id === state.activeGroupId);
         const currentActive = activeGroup?.activeTabId;
         if (currentActive) {
-          state.closeTab(currentActive, state.activeGroupId);
-          console.log(`Shortcut captured: Closed active tab ${currentActive}`);
+          // Goes through the shared close channel rather than the raw store
+          // action, so the unsaved/running guards apply to the keyboard path
+          // too. They did not before.
+          requestCloseTab(currentActive);
         }
       } else if (matchesShortcut(e, keyboardShortcuts.openSearch)) {
         e.preventDefault();

@@ -4,7 +4,7 @@
 
 - [x] PR 0 — Establish the baseline and test harness
 - [x] PR 1 — Replace editor groups with a declarative single-workspace tab system
-- [ ] PR 2 — Refactor the application shell and hide the explorer by default
+- [x] PR 2 — Refactor the application shell and hide the explorer by default
 - [ ] PR 3 — Add an extensible application startup procedure
 - [ ] PR 4 — Complete the shared sidecar agent protocol migration
 - [ ] PR 5 — Complete Git integration, including detached HEAD and submodules
@@ -197,21 +197,21 @@ One command validates frontend types and build, frontend tests, sidecar protocol
 
 ### Checklist
 
-- [ ] Extract `AppBootstrapBoundary`.
-- [ ] Extract `AppShell`.
-- [ ] Extract `NavigationRail`.
-- [ ] Extract `ContextDrawer`.
-- [ ] Extract `MainWorkspace`, `TabStrip`, and `TabOutlet`.
-- [ ] Make the explorer closed at application launch.
-- [ ] Put explorer and source control in the contextual drawer.
-- [ ] Move drawer visibility and width into a focused UI store slice.
-- [ ] Preserve the drawer width without automatically reopening it after restart.
-- [ ] Make the drawer overlay the workspace at narrow widths.
-- [ ] Preserve search, explorer toggle, and close-tab shortcuts.
-- [ ] Remove split-editor controls and styles.
-- [ ] Remove unnecessary nested card borders and shadows.
-- [ ] Standardize spacing, radii, typography, focus states, and tooltips.
-- [ ] Verify keyboard-only navigation and focus restoration.
+- [x] Extract `AppBootstrapBoundary`.
+- [x] Extract `AppShell`.
+- [x] Extract `NavigationRail`.
+- [x] Extract `ContextDrawer`.
+- [x] Extract `MainWorkspace`, `TabStrip`, and `TabOutlet`.
+- [x] Make the explorer closed at application launch.
+- [x] Put explorer and source control in the contextual drawer.
+- [x] Move drawer visibility and width into a focused UI store slice.
+- [x] Preserve the drawer width without automatically reopening it after restart.
+- [x] Make the drawer overlay the workspace at narrow widths.
+- [x] Preserve search, explorer toggle, and close-tab shortcuts.
+- [x] Remove split-editor controls and styles. (Already satisfied by PR 1 — `grep 'splitTab|editorGroup|groupSizes|activeGroupId'` returns only a historical comment.)
+- [x] Remove unnecessary nested card borders and shadows.
+- [x] Standardize spacing, radii, typography, focus states, and tooltips.
+- [x] Verify keyboard-only navigation and focus restoration.
 
 ### Visual direction
 
@@ -224,6 +224,22 @@ One command validates frontend types and build, frontend tests, sidecar protocol
 ### Completion criteria
 
 The workspace occupies the main window, no split affordance remains, and explorer content is neither mounted nor visible until explicitly opened.
+
+### Deviations from this plan, and why
+
+- **Sixteen commits on the single `refactor` branch, not a fresh PR-2 branch.** Directed mid-PR: every PR in this plan lands on one continuously-growing branch instead of one branch per PR, merged to `main` only when the whole plan is done. Does not change what any commit contains, only where it lives.
+- **`.surface` needs `position: relative`, not just `container-type: inline-size`.** The plan's overlay design assumed the inline-size container automatically became the containing block for its `position: absolute` descendant; verified live that it did not (the drawer anchored to the viewport, covering the rail, until `position: relative` was added). Recorded here because the plan's CSS snippet under "Overlay at narrow widths" doesn't show it.
+- **`.workspace-container`'s GPU compositing moved up, not across.** The plan's risk #4 listed `.workspace-container` alongside `.side-pane` and `.tabs-container` as classes "renamed away" by this PR — in fact `Workspace.tsx`'s own `.workspace-container` div was never renamed (that file is explicitly out of scope until PR 7). What actually happened: `MainWorkspace.module.css`'s `.workspace` wrapper, introduced in commit 8 as `Workspace.tsx`'s new parent, now composes the GPU layer instead — compositing the wrapper covers the div nested inside it, so the classname was dropped from `Workspace.tsx` (a one-line, no-behavior-change edit) rather than kept alive for a rule that had become redundant.
+- **`scrollbar-none` turned out to already be dead.** The plan's commit 15 line item ("finally remove `scrollbar-none tabs-container` from `TabStrip.view.tsx`") assumed both classes were live. `tabs-container` was (GPU compositing, migrated to the composed `.gpuLayer` module); `scrollbar-none` was not — grepped the full codebase and Tailwind's own utility set and found no definition anywhere, in this file, `TerminalPanel.tsx` (its other user), or upstream. Removing it was a pure no-op; no scrollbar-hiding behavior was added or lost.
+- **The rail has 11 buttons, not 13.** The plan's Tooltip section states "13 rail buttons + 3 drawer header tools" adopting the primitive. The actual `NAVIGATION_RAIL_ICONS` registry (carried over unchanged from the old `SIDEBAR_ICONS`) has 11 entries. All 11, plus the 3 drawer header tools, adopted `Tooltip` — the plan's count was simply off; there was never a 13th icon to find.
+- **`layering.test.ts`'s new rule exempts `import type`.** The plan's Tests section says to add "store-side modules must not import `../../components/**`" without qualification. `store/types.ts` and `createIntegrationSlice.ts` both already import `type { McpServerConfig }` from `components/mcp/types`, predating this PR. Since `import type` is erased entirely at compile time (no runtime edge, no React code reaching the store's bundle), the new test's specifier check skips type-only imports rather than either silently passing on a technicality or forcing an unrelated type relocation into this PR. Documented in the test itself.
+- **Keyboard resize step sizes (8px / 32px) and Home/End binding to the min/max width are this PR's own choice**, not specified by the plan's "Arrow/Shift+Arrow resizing" line.
+
+### Known gaps left for later
+
+- **The double header when Source Control is open.** `ContextDrawer`'s own header (title + tools) sits above `SourceControl`'s untouched 607-line internal header — the plan called this out in advance as out of scope ("editing 607 lines is out of scope; flag the resulting double-header for PR 7") and it is still true after commit 16.
+- **`TabStrip`'s two `title=` attributes are not `Tooltip`.** `.tabs` is `overflow-x: auto`, and a bottom-placed `Tooltip` bubble there would be clipped vertically (a non-`visible` overflow on one axis forces `auto` on both, per spec). Fixing it needs a portal; tracked as app-wide tooltip-migration follow-up, same as the remaining ~167 `title=` sites elsewhere in the app.
+- **The app-wide token migration (1,773 legacy usages, 65 files)** was explicitly out of scope for this PR from the start — visual work here was confined to shell surfaces the extraction itself already rewrites, plus the new `Tooltip` primitive — and remains unaddressed.
 
 ## PR 3 — Extensible application startup procedure
 

@@ -35,6 +35,22 @@ function importSpecifiers(source: string): string[] {
   return specifiers;
 }
 
+// Same as importSpecifiers, but drops `import type {...} from "..."` --
+// those are erased entirely at compile time (no `import type` survives to
+// the runtime bundle), so they create no actual import-graph edge. Used
+// only by the components/ rule below, which cares about the store
+// literally pulling React component code into its bundle.
+function runtimeImportSpecifiers(source: string): string[] {
+  const specifiers: string[] = [];
+  const pattern = /(?:^|\n)\s*import\s+(type\s+)?[^;]*?from\s+["']([^"']+)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    if (match[1]) continue;
+    specifiers.push(match[2]);
+  }
+  return specifiers;
+}
+
 function offendersMatching(predicate: (specifier: string) => boolean): string[] {
   return STORE_SIDE.filter(([, source]) => importSpecifiers(source).some(predicate)).map(
     ([file]) => file,
@@ -67,5 +83,19 @@ describe("tab system layering", () => {
     const policy = STORE_SIDE.find(([file]) => file.endsWith("policy.ts"));
     expect(policy).toBeDefined();
     expect(importSpecifiers(policy![1]).filter((s) => s.includes("services/"))).toEqual([]);
+  });
+
+  it("keeps components/ out of the store's runtime import graph (REFACTOR_PLAN.md PR 2)", () => {
+    // `import type` is deliberately exempt (see runtimeImportSpecifiers):
+    // store/types.ts and createIntegrationSlice.ts both import
+    // `type { McpServerConfig }` from components/mcp/types, pre-dating this
+    // rule. It's erased at compile time -- no React component code actually
+    // reaches the store's bundle -- so it's recorded as fine here rather
+    // than silently exempted or forcing an unrelated type relocation to
+    // land inside this PR.
+    const offenders = STORE_SIDE.filter(([, source]) =>
+      runtimeImportSpecifiers(source).some((s) => s.includes("/components/")),
+    ).map(([file]) => file);
+    expect(offenders).toEqual([]);
   });
 });

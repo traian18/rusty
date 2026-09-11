@@ -114,6 +114,78 @@ Every close affordance — tab strip, overflow menu, keyboard shortcut — route
 through the `src/tabs/closeRequests.ts` event channel so the guards cannot be
 bypassed.
 
+## The application shell
+
+The shell (PR 2) is composition, not logic: every file under
+`src/components/shell/`, `navigation/`, `drawer/`, and `workspace/` is thin —
+either a container reading the store and handing props down, or a `.view.tsx`
+rendering them. Behavior lives in `createUiSlice` and two pure modules
+(`preferences/shellLayout.ts`, `components/shell/consoleFormat.ts`), which is
+what makes the shell testable at the store level without `@testing-library/
+react` (see "Testing topology" below).
+
+```
+App  (DevLogBridge, GlobalShortcuts, AlertModal — all outside the boundary)
+└── AppBootstrapBoundary        (hydrateUi, initTerminalState, loadSecureConfig, loadSkills)
+    └── AppShell
+        ├── Header
+        ├── NavigationRail      (sibling of the card — see below)
+        ├── .surface            (the one bordered/radiused/shadowed card; overflow: hidden)
+        │   ├── ContextDrawer   ({drawerOpen && …}, lazy-loaded content)
+        │   └── MainWorkspace   (wraps Workspace.tsx — does not absorb it, see "The tab system")
+        └── SearchPalette       ({searchOpen && …})
+```
+
+**`DevLogBridge`, `GlobalShortcuts`, and `AlertModal` mount outside
+`AppBootstrapBoundary`, on purpose.** `DevLogBridge` needs to be capturing
+`console.error` before the boundary can fail into it; `GlobalShortcuts`
+registers once, for the app's lifetime, with `[]` deps — reading
+`keyboardShortcuts` live via `useWorkspaceStore.getState()` inside the handler
+rather than subscribing, which is what keeps Cmd+R/Cmd+K suppression working
+during boot and prevents the store from re-registering the listener every time
+an unrelated field changes (the bug this replaced: the old listener's
+dependency array included a callback whose identity changed on every sidebar
+width commit).
+
+**The rail is a sibling of `.surface`, never a child.** `.surface`'s `overflow:
+hidden` is what collapses what used to be two floating cards (rail + drawer,
+each with their own border/radius/shadow) into one; a `Tooltip` placed
+`"right"` on a rail button would be clipped by that same `overflow: hidden` if
+the rail were inside it. `NavigationRail.module.css` carries a comment
+warning against ever adding `overflow` to `.rail` for the same reason.
+
+**Drawer state lives in `createUiSlice`, not component state.** `drawerOpen`,
+`drawerView`, `drawerWidth`, and `searchOpen` are UI-only state with one
+persisted field (`drawerWidth`, via `preferences/shellLayout.ts`, mirroring
+`preferences/shortcuts.ts`'s `typeof localStorage` guard). Per "Slice
+import-time purity" above, the slice initializes `drawerWidth` to a constant
+and only reads `localStorage` inside `hydrateUi()`, called once from
+`AppBootstrapBoundary` — not at slice creation.
+
+`toggleDrawerView` (the rail's click handler) and `openDrawer` (used by
+`revealFileInTree`) are deliberately different actions: the former closes the
+drawer on a same-view re-press, the latter never closes it. `revealFileInTree`
+(`createWorkspaceSlice.ts`) sets `drawerOpen`/`drawerView` in the *same*
+`set()` call as `revealPath`/`expandedPaths` — not via a `window` event on a
+later tick — because `ContextDrawer` (and `FileTree` inside it) only exists in
+the tree once `drawerOpen` is true; a listener reacting after the fact risked
+firing before anything existed to consume `revealPath`.
+
+**GPU compositing is composed, not classname-matched.** `src/styles/
+compositing.module.css`'s `.gpuLayer` is `composed` into each surface's CSS
+Module (`MainWorkspace.module.css`, `ContextDrawer.module.css`, `TabStrip
+.module.css`) rather than targeted by a global selector in `index.css` listing
+each surface's classname by hand — the latter is exactly how three surfaces'
+worth of hardware acceleration silently stopped applying, one at a time, as
+this refactor renamed them. `index.css` keeps only `.monaco-editor`, which
+nothing here renames.
+
+**`Tooltip` (`components/ui/Tooltip/`) wraps its trigger; it does not live
+inside it.** `aria-label` on the trigger stays its accessible *name*;
+`aria-describedby` (pointing at the tooltip's own id) is its *description* —
+folding tooltip text into the trigger's own children, as the pre-PR-2 sidebar
+did, makes an icon button announce its label twice.
+
 ## Migration rules (for PRs 1-7)
 
 - Each PR leaves the app buildable (`npm run build` passes) at every commit

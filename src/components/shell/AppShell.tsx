@@ -34,9 +34,15 @@ export const AppShell: React.FC = () => {
     drawerWidthRef.current = newWidth;
     // Directly mutate DOM — no React re-render. The rail no longer shares
     // this width (it left the card in PR 2's commit 11), so this is the
-    // drawer's own width, not rail-plus-drawer.
+    // drawer's own width, not rail-plus-drawer. A CSS custom property
+    // rather than .style.width: ContextDrawer.module.css's `width: var(
+    // --drawer-width)` is the one rule that supplies width in BOTH docked
+    // and narrow-shell overlay mode (where `max-width` additionally
+    // clamps it) -- writing the variable means this drag handler needs no
+    // idea which mode is active, matching the overlay's "no breakpoint
+    // detection" design (REFACTOR_PLAN.md PR 2).
     if (drawerElementRef.current) {
-      drawerElementRef.current.style.width = `${newWidth}px`;
+      drawerElementRef.current.style.setProperty("--drawer-width", `${newWidth}px`);
     }
   }, []);
 

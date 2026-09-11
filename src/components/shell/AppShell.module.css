@@ -16,6 +16,7 @@
  * old Sidebar's) plus two more hand-computed "inner" radii.
  */
 .surface {
+  position: relative;
   display: flex;
   min-width: 0;
   height: 100%;
@@ -24,4 +25,11 @@
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-elevated);
+  /* Named so ContextDrawer.module.css's overlay `@container shell (...)`
+     query measures THIS element's inline size, not an ancestor's. `position:
+     relative` (otherwise unnecessary here) is what makes it the containing
+     block for the drawer's `position: absolute` in overlay mode -- without
+     it the drawer anchors to the viewport instead of the card. */
+  container-name: shell;
+  container-type: inline-size;
 }

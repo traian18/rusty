@@ -3,7 +3,7 @@ import { ChevronLeft, FoldHorizontal, RefreshCw } from "lucide-react";
 import { LazyFileTree, LazySourceControl } from "./drawerContents";
 import { DrawerSkeleton } from "./DrawerSkeleton";
 import { Tooltip } from "../ui";
-import type { DrawerView } from "../../preferences/shellLayout";
+import { DRAWER_MIN_WIDTH, DRAWER_MAX_WIDTH, type DrawerView } from "../../preferences/shellLayout";
 import styles from "./ContextDrawer.module.css";
 
 interface ContextDrawerViewProps {
@@ -15,6 +15,8 @@ interface ContextDrawerViewProps {
   handleCollapseAllFolders: () => void;
   handleCollapseDrawer: () => void;
   onResizerMouseDown: (e: React.MouseEvent) => void;
+  onResizerKeyDown: (e: React.KeyboardEvent) => void;
+  onDrawerKeyDown: (e: React.KeyboardEvent) => void;
 }
 
 export const ContextDrawerView: React.FC<ContextDrawerViewProps> = ({
@@ -26,12 +28,19 @@ export const ContextDrawerView: React.FC<ContextDrawerViewProps> = ({
   handleCollapseAllFolders,
   handleCollapseDrawer,
   onResizerMouseDown,
+  onResizerKeyDown,
+  onDrawerKeyDown,
 }) => {
   return (
     <div
       ref={containerRef}
       className={styles.drawer}
-      style={{ width: `${drawerWidth}px` }}
+      // --drawer-width, not a `width` inline style: ContextDrawer.module.css's
+      // `width: var(--drawer-width)` rule is what applies it, in both docked
+      // and narrow-shell overlay mode. The cast is needed because React 19's
+      // CSSProperties still rejects custom properties.
+      style={{ "--drawer-width": `${drawerWidth}px` } as React.CSSProperties}
+      onKeyDown={onDrawerKeyDown}
     >
       {/* Header lives outside .drawerBody's scroller so its tooltips and
           the sticky-header clipping bug (old Sidebar.view.tsx) can't recur. */}
@@ -104,7 +113,15 @@ export const ContextDrawerView: React.FC<ContextDrawerViewProps> = ({
 
       <div
         onMouseDown={onResizerMouseDown}
+        onKeyDown={onResizerKeyDown}
         className={styles.resizer}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize drawer"
+        aria-valuenow={drawerWidth}
+        aria-valuemin={DRAWER_MIN_WIDTH}
+        aria-valuemax={DRAWER_MAX_WIDTH}
+        tabIndex={0}
       />
     </div>
   );

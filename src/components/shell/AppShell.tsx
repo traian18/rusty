@@ -7,6 +7,11 @@ import { AppShellView } from "./AppShell.view";
  * The application shell: header, navigation, the context drawer, and the
  * main workspace. Everything App.tsx used to render directly now lives here,
  * mounted only once AppBootstrapBoundary reaches "ready".
+ *
+ * No longer owns a "reveal-file-in-tree" window listener: revealFileInTree
+ * (createWorkspaceSlice) sets drawerOpen/drawerView directly, in the same
+ * set() as revealPath, instead of dispatching a CustomEvent for this
+ * component to pick up on a later tick (REFACTOR_PLAN.md PR 2, commit 13).
  */
 export const AppShell: React.FC = () => {
   const searchOpen = useWorkspaceStore((state) => state.searchOpen);
@@ -15,14 +20,6 @@ export const AppShell: React.FC = () => {
   const drawerOpen = useWorkspaceStore((state) => state.drawerOpen);
   const drawerWidth = useWorkspaceStore((state) => state.drawerWidth);
   const setDrawerWidth = useWorkspaceStore((state) => state.setDrawerWidth);
-
-  useEffect(() => {
-    const handleReveal = () => {
-      useWorkspaceStore.getState().openDrawer("explorer");
-    };
-    window.addEventListener("reveal-file-in-tree", handleReveal);
-    return () => window.removeEventListener("reveal-file-in-tree", handleReveal);
-  }, []);
 
   const isDraggingRef = useRef(false);
   const drawerWidthRef = useRef(drawerWidth);

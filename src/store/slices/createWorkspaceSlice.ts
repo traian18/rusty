@@ -94,8 +94,21 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
       currentPath += (index > 0 ? "/" : "") + parts[index];
       expandedPaths[currentPath] = true;
     }
-    setTimeout(() => window.dispatchEvent(new CustomEvent("reveal-file-in-tree")), 0);
-    return { expandedPaths, revealPath: filePath };
+    return {
+      expandedPaths,
+      revealPath: filePath,
+      // Opening the drawer here -- in the SAME set() as revealPath --
+      // rather than via a setTimeout + CustomEvent that a separate
+      // AppShell listener picked up (the old handshake) is what fixes a
+      // real bug: a Source Control user pressing "Reveal in Explorer"
+      // used to have the event fire before ContextDrawer (mounted only
+      // once drawerOpen flips) existed to hear it, stranding revealPath.
+      // A same-tick synchronous update means FileTree is guaranteed to
+      // mount already reading the drawerOpen===true state that carries
+      // this revealPath.
+      drawerOpen: true,
+      drawerView: "explorer",
+    };
   }),
 
   clearRevealPath: () => set({ revealPath: null }),

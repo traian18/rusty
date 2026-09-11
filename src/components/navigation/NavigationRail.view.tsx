@@ -1,10 +1,21 @@
 import React from "react";
 import { Tooltip } from "../ui";
+import { preloadDrawerContent } from "../drawer/drawerContents";
 import type {
   NavigationRailIconItem,
   NavigationRailStoreState,
 } from "./NavigationRailPresenter";
 import styles from "./NavigationRail.module.css";
+
+// The only two rail items that open a lazy-loaded drawer view.
+const DRAWER_PRELOAD_IDS = new Set(["explorer", "git"]);
+
+function preloadHandlersFor(id: string) {
+  if (!DRAWER_PRELOAD_IDS.has(id)) return {};
+  const view = id === "explorer" ? "explorer" : "git";
+  const preload = () => preloadDrawerContent(view);
+  return { onPointerEnter: preload, onFocus: preload };
+}
 
 interface NavigationRailViewProps {
   topIcons: NavigationRailIconItem[];
@@ -37,6 +48,7 @@ export const NavigationRailView: React.FC<NavigationRailViewProps> = ({
                 onClick={() => item.onClick(store)}
                 className={`${styles.railButton} ${active ? styles.railButtonActive : ""}`}
                 aria-label={item.label}
+                {...preloadHandlersFor(item.id)}
               >
                 <Icon size={20} />
                 {badge > 0 && (
@@ -68,6 +80,7 @@ export const NavigationRailView: React.FC<NavigationRailViewProps> = ({
                 onClick={() => item.onClick(store)}
                 className={`${styles.railButton} ${active ? styles.railButtonActive : ""}`}
                 aria-label={item.label}
+                {...preloadHandlersFor(item.id)}
               >
                 <Icon size={20} />
               </button>

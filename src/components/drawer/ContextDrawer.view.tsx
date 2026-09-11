@@ -1,7 +1,7 @@
-import React from "react";
+import React, { Suspense } from "react";
 import { ChevronLeft, FoldHorizontal, RefreshCw } from "lucide-react";
-import { FileTree } from "../FileTree";
-import { SourceControl } from "../SourceControl";
+import { LazyFileTree, LazySourceControl } from "./drawerContents";
+import { DrawerSkeleton } from "./DrawerSkeleton";
 import { Tooltip } from "../ui";
 import type { DrawerView } from "../../preferences/shellLayout";
 import styles from "./ContextDrawer.module.css";
@@ -80,20 +80,26 @@ export const ContextDrawerView: React.FC<ContextDrawerViewProps> = ({
         </div>
       </div>
 
+      {/* Suspense wraps only the body -- the header and close button paint
+          on the frame the drawer opens; only the tree/status content shows
+          a fallback. preloadDrawerContent (rail hover/focus) means this
+          essentially never suspends for a mouse user. */}
       <div className={styles.drawerBody}>
-        {drawerView === "explorer" ? (
-          <div className={styles.explorerContent}>
-            {fileTree.length === 0 ? (
-              <div className={styles.empty}>
-                No workspace loaded.
-              </div>
-            ) : (
-              <FileTree entries={fileTree} />
-            )}
-          </div>
-        ) : (
-          <SourceControl />
-        )}
+        <Suspense fallback={<DrawerSkeleton />}>
+          {drawerView === "explorer" ? (
+            <div className={styles.explorerContent}>
+              {fileTree.length === 0 ? (
+                <div className={styles.empty}>
+                  No workspace loaded.
+                </div>
+              ) : (
+                <LazyFileTree entries={fileTree} />
+              )}
+            </div>
+          ) : (
+            <LazySourceControl />
+          )}
+        </Suspense>
       </div>
 
       <div

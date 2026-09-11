@@ -4,21 +4,21 @@ import type { WorkspaceState } from "../../store";
 import { RustyIcon } from "../RustyIcon";
 import { formatCompactTokenCount } from "../../services/tokenFormat";
 
-export type SidebarStoreState = Pick<
+export type NavigationRailStoreState = Pick<
   WorkspaceState,
   "openTab" | "gitStatus" | "metricsTodayTotal" | "toggleDrawerView"
 >;
 
-export interface SidebarIconItem {
+export interface NavigationRailIconItem {
   id: string;
   label: string;
   icon: React.ComponentType<any>;
-  onClick: (storeState: SidebarStoreState) => void;
-  badgeCount?: (storeState: SidebarStoreState) => number;
-  badgeText?: (storeState: SidebarStoreState) => string | undefined;
+  onClick: (storeState: NavigationRailStoreState) => void;
+  badgeCount?: (storeState: NavigationRailStoreState) => number;
+  badgeText?: (storeState: NavigationRailStoreState) => string | undefined;
 }
 
-export const SIDEBAR_ICONS: SidebarIconItem[] = [
+export const NAVIGATION_RAIL_ICONS: NavigationRailIconItem[] = [
   {
     id: "workspace",
     label: "Open Workspace",

@@ -7,3 +7,21 @@
   overflow: hidden;
   padding: var(--space-1) var(--space-3) var(--space-3);
 }
+
+/*
+ * The one elevated shell surface (REFACTOR_PLAN.md PR 2): 1 border, 1
+ * radius, 1 shadow, `overflow: hidden` clipping ContextDrawer and
+ * MainWorkspace to it. Neither child carries its own border/radius/shadow
+ * any more -- that's what used to be two floating cards (this one and the
+ * old Sidebar's) plus two more hand-computed "inner" radii.
+ */
+.surface {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-elevated);
+}

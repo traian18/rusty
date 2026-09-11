@@ -3,11 +3,6 @@ import { useWorkspaceStore } from "../../store";
 import { clampDrawerWidth } from "../../preferences/shellLayout";
 import { AppShellView } from "./AppShell.view";
 
-// Mirrors Sidebar.view.tsx's RAIL_WIDTH -- see the comment there. Both are
-// deleted together once the rail becomes an independent NavigationRail with
-// its own CSS width (REFACTOR_PLAN.md PR 2).
-const RAIL_WIDTH = 56;
-
 /**
  * The application shell: header, navigation, the context drawer, and the
  * main workspace. Everything App.tsx used to render directly now lives here,
@@ -17,6 +12,7 @@ export const AppShell: React.FC = () => {
   const searchOpen = useWorkspaceStore((state) => state.searchOpen);
   const setSearchOpen = useWorkspaceStore((state) => state.setSearchOpen);
 
+  const drawerOpen = useWorkspaceStore((state) => state.drawerOpen);
   const drawerWidth = useWorkspaceStore((state) => state.drawerWidth);
   const setDrawerWidth = useWorkspaceStore((state) => state.setDrawerWidth);
 
@@ -28,66 +24,69 @@ export const AppShell: React.FC = () => {
     return () => window.removeEventListener("reveal-file-in-tree", handleReveal);
   }, []);
 
-  const isSidebarDraggingRef = useRef(false);
-  const sidebarWidthRef = useRef(drawerWidth);
-  const sidebarElementRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const drawerWidthRef = useRef(drawerWidth);
+  const drawerElementRef = useRef<HTMLDivElement>(null);
 
-  const handleSidebarMouseMove = useCallback((moveEvent: MouseEvent) => {
-    if (!isSidebarDraggingRef.current) return;
-    const startX = (isSidebarDraggingRef as any)._startX as number;
-    const startWidth = (isSidebarDraggingRef as any)._startWidth as number;
+  const handleDrawerResizeMouseMove = useCallback((moveEvent: MouseEvent) => {
+    if (!isDraggingRef.current) return;
+    const startX = (isDraggingRef as any)._startX as number;
+    const startWidth = (isDraggingRef as any)._startWidth as number;
     const dx = moveEvent.clientX - startX;
     const newWidth = clampDrawerWidth(startWidth + dx);
-    sidebarWidthRef.current = newWidth;
-    // Directly mutate DOM — no React re-render
-    if (sidebarElementRef.current) {
-      sidebarElementRef.current.style.width = `${RAIL_WIDTH + newWidth}px`;
+    drawerWidthRef.current = newWidth;
+    // Directly mutate DOM — no React re-render. The rail no longer shares
+    // this width (it left the card in PR 2's commit 11), so this is the
+    // drawer's own width, not rail-plus-drawer.
+    if (drawerElementRef.current) {
+      drawerElementRef.current.style.width = `${newWidth}px`;
     }
   }, []);
 
-  const handleSidebarMouseUp = useCallback(() => {
-    isSidebarDraggingRef.current = false;
-    document.removeEventListener("mousemove", handleSidebarMouseMove);
-    document.removeEventListener("mouseup", handleSidebarMouseUp);
+  const handleDrawerResizeMouseUp = useCallback(() => {
+    isDraggingRef.current = false;
+    document.removeEventListener("mousemove", handleDrawerResizeMouseMove);
+    document.removeEventListener("mouseup", handleDrawerResizeMouseUp);
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
     // Commit the final width once. setDrawerWidth clamps and persists.
-    setDrawerWidth(sidebarWidthRef.current);
-  }, [handleSidebarMouseMove, setDrawerWidth]);
+    setDrawerWidth(drawerWidthRef.current);
+  }, [handleDrawerResizeMouseMove, setDrawerWidth]);
 
-  const handleSidebarMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleDrawerResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    isSidebarDraggingRef.current = true;
-    (isSidebarDraggingRef as any)._startX = e.clientX;
-    (isSidebarDraggingRef as any)._startWidth = sidebarWidthRef.current;
+    isDraggingRef.current = true;
+    (isDraggingRef as any)._startX = e.clientX;
+    (isDraggingRef as any)._startWidth = drawerWidthRef.current;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", handleSidebarMouseMove);
-    document.addEventListener("mouseup", handleSidebarMouseUp);
-  }, [handleSidebarMouseMove, handleSidebarMouseUp]);
+    document.addEventListener("mousemove", handleDrawerResizeMouseMove);
+    document.addEventListener("mouseup", handleDrawerResizeMouseUp);
+  }, [handleDrawerResizeMouseMove, handleDrawerResizeMouseUp]);
 
   // Keep widthRef in sync when drawerWidth changes elsewhere (e.g. hydration).
   useEffect(() => {
-    sidebarWidthRef.current = drawerWidth;
+    drawerWidthRef.current = drawerWidth;
   }, [drawerWidth]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      document.removeEventListener("mousemove", handleSidebarMouseMove);
-      document.removeEventListener("mouseup", handleSidebarMouseUp);
+      document.removeEventListener("mousemove", handleDrawerResizeMouseMove);
+      document.removeEventListener("mouseup", handleDrawerResizeMouseUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [handleSidebarMouseMove, handleSidebarMouseUp]);
+  }, [handleDrawerResizeMouseMove, handleDrawerResizeMouseUp]);
 
   return (
     <AppShellView
       searchOpen={searchOpen}
       onSearchOpen={() => setSearchOpen(true)}
       onSearchClose={() => setSearchOpen(false)}
-      onSidebarMouseDown={handleSidebarMouseDown}
-      sidebarElementRef={sidebarElementRef}
+      drawerOpen={drawerOpen}
+      onDrawerResizeMouseDown={handleDrawerResizeMouseDown}
+      drawerElementRef={drawerElementRef}
     />
   );
 };

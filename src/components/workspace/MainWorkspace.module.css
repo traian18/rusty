@@ -1,3 +1,7 @@
+/*
+ * Flat: border/radius/shadow now live once, on the shell's `.surface`
+ * (AppShell.module.css) that this and ContextDrawer both sit inside.
+ */
 .workspace {
   position: relative;
   display: flex;
@@ -6,8 +10,5 @@
   flex: 1;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--color-border-default);
-  border-radius: 1.25rem;
   background: var(--color-editor-background);
-  box-shadow: var(--shadow-elevated);
 }

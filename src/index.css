@@ -192,12 +192,18 @@
   shape-rendering: geometricPrecision;
 }
 
-/* Enable hardware accelerated rendering globally for improved quality and frame rates */
-.monaco-editor,
-.workspace-container,
-.tabs-container,
-.side-pane,
-.modal-overlay {
+/*
+ * Enable hardware accelerated rendering for Monaco. The other names this
+ * selector used to list (.workspace-container, .tabs-container, .side-pane)
+ * moved to src/styles/compositing.module.css's `.gpuLayer`, composed into
+ * each surface's own CSS Module instead of matched by a global classname
+ * that silently stopped applying whenever that surface got renamed
+ * (REFACTOR_PLAN.md PR 2 commit 15). .modal-overlay was never actually
+ * used by any component and is dropped outright, along with the second,
+ * separate `.modal-overlay { z-index: ...; backdrop-filter: ...; }` rule
+ * that used to follow this one.
+ */
+.monaco-editor {
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
@@ -207,12 +213,6 @@
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
   will-change: transform;
-}
-
-.modal-overlay {
-  z-index: 9999 !important;
-  -webkit-backdrop-filter: blur(12px) !important;
-  backdrop-filter: blur(12px) !important;
 }
 
 /* Task Auditor node - always visible wider scrollbars */

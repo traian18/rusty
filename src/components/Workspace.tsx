@@ -695,8 +695,12 @@ export const Workspace: React.FC = () => {
 
   const tabViewContext: TabViewContext = { executeNode, stopExecution };
 
+  // workspace-container (GPU compositing) dropped from the div below:
+  // MainWorkspace.module.css's .workspace wrapper -- this div's parent
+  // since PR 2 commit 8 -- now composes the same treatment one level up,
+  // superseding it (REFACTOR_PLAN.md PR 2 commit 15).
   return (
-    <div className="flex-1 flex h-full min-w-0 overflow-hidden relative bg-[var(--bg-editor)] workspace-container">
+    <div className="flex-1 flex h-full min-w-0 overflow-hidden relative bg-[var(--bg-editor)]">
       <CommandPermissionPresenter />
       <div className="flex flex-col h-full w-full min-w-0 overflow-hidden">
         <TabStrip />

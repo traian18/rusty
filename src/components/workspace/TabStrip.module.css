@@ -12,7 +12,11 @@
   user-select: none;
 }
 
+/* composes the shared GPU-layer treatment that used to target this
+   element's global `tabs-container` classname directly (index.css) --
+   see src/styles/compositing.module.css for why. */
 .tabs {
+  composes: gpuLayer from "../../styles/compositing.module.css";
   display: flex;
   min-width: 0;
   height: 100%;

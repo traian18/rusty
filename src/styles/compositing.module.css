@@ -1,0 +1,29 @@
+/*
+ * The GPU-layer treatment that used to live in index.css as a global rule
+ * keyed by classname: `.monaco-editor, .workspace-container, .tabs-
+ * container, .side-pane, .modal-overlay { transform: translate3d(0,0,0); ... }`.
+ * Three of those four non-Monaco names got renamed away in this refactor
+ * (.side-pane with the old Sidebar, .tabs-container off TabStrip.view.tsx,
+ * .modal-overlay was already dead) -- a global selector list silently loses
+ * coverage every time a consuming component renames, with nothing to catch
+ * it. `composes: gpuLayer from "../../styles/compositing.module.css"` ties
+ * the association to the CSS Module import graph instead, so a future
+ * rename can't break it again: the class is imported, not string-matched.
+ *
+ * If Monaco/canvas text ever looks soft after a consumer picks this up,
+ * the fix (per REFACTOR_PLAN.md PR 2) is to drop `perspective` and
+ * `transform-style` here and keep `translate3d` + `backface-visibility` --
+ * some Chromium/WebKit combinations render 3D-promoted text less crisply
+ * than a plain 2D compositing layer.
+ */
+.gpuLayer {
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  perspective: 1000px;
+  -webkit-perspective: 1000px;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  will-change: transform;
+}

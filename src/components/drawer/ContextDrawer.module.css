@@ -1,4 +1,8 @@
+/* composes the shared GPU-layer treatment that used to target the old
+   Sidebar's `.side-pane` classname directly (index.css) -- see
+   src/styles/compositing.module.css for why. */
 .drawer {
+  composes: gpuLayer from "../../styles/compositing.module.css";
   position: relative;
   display: flex;
   width: var(--drawer-width);

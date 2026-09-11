@@ -26,7 +26,15 @@ export const TabStripView: React.FC<TabStripViewProps> = ({
   return (
     <div className={styles.bar}>
       {/* Scrollable Tab Container */}
-      <div ref={tabsContainerRef} className={`${styles.tabs} scrollbar-none tabs-container`}>
+      {/* scrollbar-none/tabs-container used to be global classnames here --
+          scrollbar-none was never actually defined anywhere (a dead,
+          no-op utility) and tabs-container's only live effect (GPU
+          compositing) now comes from styles.tabs composing gpuLayer
+          (TabStrip.module.css). Both were also the one template-literal
+          className in this migrated file, the one shape check-theme-usage
+          .mjs's string-literal rule doesn't catch -- REFACTOR_PLAN.md PR 2
+          commit 15 closes that out along with the rest of the GPU rule. */}
+      <div ref={tabsContainerRef} className={styles.tabs}>
         {openTabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const surface = getTabView(tab.type).surface;

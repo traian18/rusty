@@ -64,7 +64,7 @@ import {
 import { executeNode } from "./capabilities/executeNode";
 import { stopPiAgentRun } from "./services/piAgentChat";
 import { globalExplore, stopGlobalExploration } from "./capabilities/globalExplore";
-import { reconciliateEdge } from "./capabilities/reconciliateEdge";
+import { reconciliateEdge, stopEdgeReconciliation } from "./capabilities/reconciliateEdge";
 import { reconciliateGraph } from "./capabilities/reconciliateGraph";
 import { agentChat, stopAgentChatDelegations } from "./capabilities/agentChat";
 import { generateSkill } from "./capabilities/generateSkill";
@@ -535,6 +535,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         safeSend(ws, { type: "global_explore_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "global_explore") {
         await globalExplore(ws, data);
+      } else if (data.type === "reconciliate_edge_stop") {
+        const stopped = stopEdgeReconciliation(data.edgeId);
+        safeSend(ws, { type: "reconciliate_edge_stopped", edgeId: data.edgeId, stopped });
       } else if (data.type === "reconciliate_edge") {
         await reconciliateEdge(ws, data);
       } else if (data.type === "reconciliate_graph") {

@@ -10,7 +10,7 @@ import { useState, useRef, useEffect } from "react";
 import { useWorkspaceStore } from "../../store";
 import { VfsRegistry } from "../../services/vfs";
 import { notify } from "../../notificationStore";
-import { providerHasModelReference } from "../../store/providerHelpers";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../../config/sidecar";
 import type { TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
@@ -82,10 +82,16 @@ export const useEdgeWebSocket = (
       const rootPath = useWorkspaceStore.getState().rootPath;
       const providers = useWorkspaceStore.getState().customProviders;
       const activeProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+      const providerStatus = useWorkspaceStore.getState().providerStatus;
       const activeModel = useWorkspaceStore.getState().activeModel;
-      const provider = providers.find((candidate) =>
-        providerHasModelReference(candidate, activeModel)
-      ) || providers.find((candidate) => candidate.id === activeProviderId);
+      const resolution = resolveExecutionProvider(providers, providerStatus, activeProviderId, activeModel);
+      if (!resolution.ok) {
+        setChatMessages((prev) => [...prev, { role: "assistant", content: resolution.message }]);
+        setIsResolving(false);
+        notify("Cannot reconcile", resolution.message, "error");
+        socket.close();
+        return;
+      }
 
       socket.send(
         JSON.stringify({
@@ -100,7 +106,7 @@ export const useEdgeWebSocket = (
           model: activeModel,
           sourcePrompt: (sourceNode?.data as any)?.prompt || "",
           targetPrompt: (targetNode?.data as any)?.prompt || "",
-          customProvider: provider || null,
+          customProvider: resolution.provider,
         })
       );
     };

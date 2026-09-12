@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { McpServerConfig } from "../../components/mcp/types";
 import { BUILT_IN_SKILLS, DEFAULT_SKILL_ID } from "../../config/skillDefinitions";
 import { skillsService } from "../../services/skillsService";
@@ -135,6 +134,7 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   mcpServers: {},
   activeThemeId: DEFAULT_THEME_ID,
   secureConfigLoaded: false,
+  pendingWorkspaceRestorePath: null,
 
   updateLspSettings: (settings) => set((state) => {
     setTimeout(() => void get().saveSecureConfig(), 0);
@@ -327,23 +327,15 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
       // Migrate themes saved before the dedicated preference became canonical.
       updates.activeThemeId = saveThemeId(config.activeThemeId);
     }
+    // The actual restore (a Tauri invoke, then loadWorkspaceData) is a
+    // separate startup step (components/shell/startupSteps.ts's
+    // "workspace-restore", dependsOn: ["secure-config"]) rather than inline
+    // here -- it needs its own, longer timeout budget and must not be able
+    // to make this step's OWN critical failure/timeout depend on a slow
+    // directory listing. That step is also secureConfigLoaded's sole owner
+    // for the "a saved path exists" case (REFACTOR_PLAN.md PR 3a); this
+    // action only records the candidate path for it to pick up.
+    updates.pendingWorkspaceRestorePath = config.lastWorkspacePath || null;
     set(updates);
-
-    if (config.lastWorkspacePath) {
-      try {
-        const fileTree: any[] = await invoke("get_directory_structure", { rootDir: config.lastWorkspacePath });
-        set({ rootPath: config.lastWorkspacePath, fileTree });
-        await get().loadGitStatus();
-      } catch (error) {
-        console.error("Failed to load last workspace folder:", error);
-      }
-    }
-
-    // Set only now, after the optional workspace-restore attempt above has
-    // settled (not right after `set(updates)`): a saveSecureConfig firing in
-    // the window while that invoke is still in flight would otherwise write
-    // lastWorkspacePath as rootPath's still-empty pre-restore value,
-    // silently losing the just-restored path on the very next save.
-    set({ secureConfigLoaded: true });
   },
 });

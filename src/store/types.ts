@@ -444,11 +444,21 @@ export interface WorkspaceState {
   getSequenceEdges: () => Edge[];
   lspSettings: LspSettings;
   updateLspSettings: (settings: Partial<LspSettings>) => void;
-  /** True only once loadSecureConfig has fully settled (including any
-      workspace restore it triggers) -- saveSecureConfig is a no-op until
+  /** True only once the initial config load AND (if a workspace was saved)
+      its restore have both settled -- saveSecureConfig is a no-op until
       then, so a failed/incomplete load can never overwrite a real,
-      previously-saved config with default state (REFACTOR_PLAN.md PR 3a). */
+      previously-saved config with default state (REFACTOR_PLAN.md PR 3a).
+      Set by loadSecureConfig directly when nothing was ever saved; set by
+      the startup "workspace-restore" step (components/shell/startupSteps.ts)
+      otherwise, once it has resolved pendingWorkspaceRestorePath one way or
+      another. */
   secureConfigLoaded: boolean;
+  /** The workspace path loadSecureConfig found saved, for the
+      "workspace-restore" step to actually restore -- null once there is
+      nothing left to restore (including "there never was anything"). Not
+      restored inline by loadSecureConfig itself: that step needs its own,
+      longer timeout budget, independent of secure-config's critical one. */
+  pendingWorkspaceRestorePath: string | null;
   saveSecureConfig: () => Promise<void>;
   loadSecureConfig: () => Promise<void>;
 }

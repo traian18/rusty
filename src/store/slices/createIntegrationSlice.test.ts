@@ -123,13 +123,34 @@ describe("createIntegrationSlice: secureConfigLoaded guard (the data-loss fix, R
     expect(testStore.getState().secureConfigLoaded).toBe(true);
   });
 
-  it("loadSecureConfig sets secureConfigLoaded after successfully restoring a saved config", async () => {
+  it("loadSecureConfig alone does NOT set secureConfigLoaded when a saved config exists -- that's the workspace-restore step's job now", async () => {
     vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({ configVersion: 1 });
     const testStore = createIntegrationTestStore();
 
     await testStore.getState().loadSecureConfig();
 
-    expect(testStore.getState().secureConfigLoaded).toBe(true);
+    expect(testStore.getState().secureConfigLoaded).toBe(false);
+  });
+
+  it("loadSecureConfig records pendingWorkspaceRestorePath from a saved config's lastWorkspacePath", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({
+      configVersion: 1,
+      lastWorkspacePath: "/Users/test/my-project",
+    });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    expect(testStore.getState().pendingWorkspaceRestorePath).toBe("/Users/test/my-project");
+  });
+
+  it("loadSecureConfig sets pendingWorkspaceRestorePath to null when the saved config never had a workspace", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({ configVersion: 1 });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    expect(testStore.getState().pendingWorkspaceRestorePath).toBeNull();
   });
 
   it("leaves secureConfigLoaded false when loadSecureConfig itself rejects", async () => {

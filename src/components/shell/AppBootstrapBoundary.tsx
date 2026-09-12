@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorkspaceStore } from "../../store";
+import { restoreWorkspace } from "./startupSteps";
 import { AppBootstrapBoundaryView } from "./AppBootstrapBoundary.view";
 
 export type ShellBootstrapStatus = "pending" | "ready" | "failed";
@@ -16,7 +17,8 @@ const PENDING_UI_DELAY_MS = 150;
 /**
  * Owns application bootstrap: hydrating UI preferences, seeding terminal
  * state, subscribing to live usage updates, loading secure configuration,
- * and (if a workspace was restored) loading its skills.
+ * and (if a workspace was saved) restoring it -- fileTree, git status,
+ * skills, and metrics together (restoreWorkspace -> loadWorkspaceData).
  *
  * This is a shell around what PR 3a's startup coordinator replaces. The
  * `ShellBootstrapStatus` here is intentionally the minimal three states;
@@ -49,6 +51,7 @@ export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ 
   useEffect(() => {
     const runId = ++runIdRef.current;
     let cancelled = false;
+    const abortController = new AbortController();
 
     setStatus("pending");
     setError(null);
@@ -66,14 +69,14 @@ export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ 
     store.loadSecureConfig()
       .then(async () => {
         if (cancelled || runId !== runIdRef.current) return;
-        const { rootPath, loadSkills } = useWorkspaceStore.getState();
-        if (rootPath) {
-          await loadSkills().catch((skillsError) => {
-            // Non-fatal, matching today's behavior: a workspace with no
-            // loadable skills still becomes usable.
-            console.error("Failed to load skills on startup:", skillsError);
-          });
-        }
+        // Interim call, not yet routed through the full startup executor
+        // (the next commit) -- restoreWorkspace is the exact function the
+        // eventual "workspace-restore" step wraps (components/shell/
+        // startupSteps.ts), called directly here so a restored workspace's
+        // skills/git/metrics keep loading between this commit and that one
+        // landing, same as initMetricsSubscription's interim wiring in
+        // commit 5.
+        await restoreWorkspace({ signal: abortController.signal });
         if (!cancelled && runId === runIdRef.current) setStatus("ready");
       })
       .catch((bootstrapError) => {
@@ -89,6 +92,7 @@ export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ 
 
     return () => {
       cancelled = true;
+      abortController.abort();
       clearTimeout(pendingTimer);
     };
   }, [attempt]);

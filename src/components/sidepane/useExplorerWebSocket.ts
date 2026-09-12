@@ -15,7 +15,8 @@ import { commandPermissionService, handleCommandPermissionMessage } from "../../
 import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
 import { invoke } from "@tauri-apps/api/core";
-import { providerHasModelReference, providerModelVariants, selectableModelProviders } from "../../store/providerHelpers";
+import { providerModelVariants, selectableModelProviders } from "../../store/providerHelpers";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT, SIDECAR_WS_URL } from "../../config/sidecar";
 export interface GeneratedTaskDraft {
@@ -355,11 +356,21 @@ export const useExplorerWebSocket = (selectedNode: any) => {
       const rootPath = useWorkspaceStore.getState().rootPath;
       const currentProviders = useWorkspaceStore.getState().customProviders;
       const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+      const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
       const currentActiveModel = useWorkspaceStore.getState().activeModel;
       const currentExploreModel = selectedNode?.data?.exploreModel || selectedNode?.data?.model || currentActiveModel;
-      const prov = currentProviders.find((provider) =>
-        providerHasModelReference(provider, currentExploreModel)
-      ) || currentProviders.find((provider) => provider.id === currentActiveProviderId);
+      const resolution = resolveExecutionProvider(
+        currentProviders,
+        currentProviderStatus,
+        currentActiveProviderId,
+        currentExploreModel,
+      );
+      if (!resolution.ok) {
+        notify("Cannot start exploration", resolution.message, "error");
+        socket.close();
+        return;
+      }
+      const prov = resolution.provider;
       const chatHistory = useWorkspaceStore.getState().globalChatHistory[selectedNodeId] || [];
 
       const isTaskNodeChat = selectedNode?.type === "taskNode";
@@ -399,7 +410,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({ role: m.role, content: m.content })),
         mcpServers,
-        customProvider: prov || null,
+        customProvider: prov,
         skill: skillData,
         planOnly: !isTaskNodeChat,
         vfsOnly: isTaskNodeChat,
@@ -744,11 +755,21 @@ export const useExplorerWebSocket = (selectedNode: any) => {
       const rootPath = useWorkspaceStore.getState().rootPath;
       const currentProviders = useWorkspaceStore.getState().customProviders;
       const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+      const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
       const currentActiveModel = useWorkspaceStore.getState().activeModel;
       const currentSummarizeModel = selectedNode?.data?.summarizeModel || currentActiveModel;
-      const prov = currentProviders.find((provider) =>
-        providerHasModelReference(provider, currentSummarizeModel)
-      ) || currentProviders.find((provider) => provider.id === currentActiveProviderId);
+      const resolution = resolveExecutionProvider(
+        currentProviders,
+        currentProviderStatus,
+        currentActiveProviderId,
+        currentSummarizeModel,
+      );
+      if (!resolution.ok) {
+        notify("Cannot summarize", resolution.message, "error");
+        socket.close();
+        return;
+      }
+      const prov = resolution.provider;
 
       // Always use task-auditor skill for summarization on this node type.
       const skills = useWorkspaceStore.getState().skills;
@@ -766,7 +787,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
         workspaceRoot: rootPath,
         model: currentSummarizeModel,
         chatHistory: [],
-        customProvider: prov || null,
+        customProvider: prov,
         skill: skillData,
       }));
     };
@@ -906,9 +927,22 @@ export const useExplorerWebSocket = (selectedNode: any) => {
     taskGenerationRequestIdRef.current = requestId;
     socket.onopen = () => {
       const state = useWorkspaceStore.getState();
-      const provider = state.customProviders.find((candidate) =>
-        providerHasModelReference(candidate, taskGenerationModel)
-      ) || state.customProviders.find((candidate) => candidate.id === state.activeCustomProviderId);
+      const resolution = resolveExecutionProvider(
+        state.customProviders,
+        state.providerStatus,
+        state.activeCustomProviderId,
+        taskGenerationModel,
+      );
+      if (!resolution.ok) {
+        setActiveTaskGeneration(taskNodeId, null);
+        updateTaskGenerationViewState(taskNodeId, {
+          failure: { message: resolution.message },
+          promptOpen: true,
+        });
+        notify("Cannot generate tasks", resolution.message, "error");
+        socket.close();
+        return;
+      }
       socket.send(JSON.stringify({
         type: "generate_task_nodes",
         requestId,
@@ -917,7 +951,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
         chatHistory,
         additionalInstructions,
         workspaceRoot: state.rootPath,
-        customProvider: provider || null,
+        customProvider: resolution.provider,
       }));
     };
     socket.onmessage = (event) => {

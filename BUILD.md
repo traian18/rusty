@@ -263,7 +263,17 @@ jobs:
 
 ## Development
 
-For development with hot-reload, run the sidecar and frontend separately:
+`npm run tauri dev` alone auto-spawns the bundled sidecar (built via `npm run
+build:sidecar`) on the same dev port the frontend expects (4001, distinct
+from release's 4000 so a dev instance never fights an installed copy — see
+`src-tauri/src/lib.rs`'s `SIDECAR_PORT` and `src/config/sidecar.ts`). That is
+enough if you are not editing `agent-sidecar`'s own source.
+
+If you *are* changing sidecar code and want hot-reload without rebuilding the
+bundle, start it manually first — it binds the same port, so the
+auto-spawned bundled copy fails to bind behind it and exits harmlessly
+(`reclaim_sidecar_port` recognizes and reclaims only its own bundled process,
+never an unrelated one, so your manual instance is left alone):
 
 ```bash
 # Terminal 1 — sidecar (hot-reload via ts-node)
@@ -272,8 +282,6 @@ cd agent-sidecar && npm run dev
 # Terminal 2 — Tauri dev (frontend + Rust with HMR)
 npm run tauri dev
 ```
-
-> In dev mode the bundled sidecar is **not** auto-spawned; you run it manually for hot-reload.
 
 ## Running the test suite
 

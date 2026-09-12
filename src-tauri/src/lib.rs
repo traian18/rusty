@@ -959,14 +959,37 @@ fn chrono_now_iso8601() -> String {
     )
 }
 
-/// The sidecar always binds this fixed port (see agent-sidecar/src/server.ts and
-/// src/config/sidecar.ts) regardless of dev vs release, so a stale process left
-/// over from a prior launch - a crashed debug build, an orphaned copy from
-/// before a rebrand, another checkout of this repo - can squat on it forever.
-/// When that happens this launch's own sidecar fails to bind and silently
-/// exits, and the UI ends up talking to whichever stale process got there
-/// first instead of the sidecar this app just spawned.
-const SIDECAR_PORT: u16 = 4000;
+/// Mirrors src/config/sidecar.ts's `SIDECAR_PORT = import.meta.env.DEV ? 4001
+/// : 4000` -- deliberately different between dev and release, so a `tauri
+/// dev` instance doesn't fight an already-installed release copy for the
+/// same port. Previously this was an unconditional 4000 with no `PORT` env
+/// passed to the spawned process below, so in dev this auto-spawned sidecar
+/// bound 4000 while the dev frontend was only ever listening on 4001 -- the
+/// two could never reach each other, and `npm run tauri dev` alone (without
+/// also following BUILD.md's separate manual-sidecar-for-hot-reload
+/// instructions) had no working sidecar at all (REFACTOR_PLAN.md PR 3a).
+///
+/// A stale process left over from a prior launch on either port (a crashed
+/// debug build, an orphaned copy from before a rebrand, another checkout of
+/// this repo) can still squat on it forever; `reclaim_sidecar_port` below
+/// guards against that for whichever port this build mode actually uses.
+const SIDECAR_PORT: u16 = if cfg!(debug_assertions) { 4001 } else { 4000 };
+
+#[cfg(test)]
+mod sidecar_port_tests {
+    use super::SIDECAR_PORT;
+
+    #[test]
+    fn dev_build_uses_the_port_the_dev_frontend_expects() {
+        // `cargo test` always builds in the debug profile, so this pins the
+        // dev-mode branch of the cfg!(debug_assertions) ternary above --
+        // matching src/config/sidecar.ts's `import.meta.env.DEV ? 4001 :
+        // 4000` (REFACTOR_PLAN.md PR 3a). The release branch (4000) needs no
+        // new test: it is exactly what this constant always was before the
+        // dev/release split existed.
+        assert_eq!(SIDECAR_PORT, 4001);
+    }
+}
 
 /// Best-effort reclaim of `SIDECAR_PORT` before spawning. Only kills processes
 /// whose command line matches our own sidecar's resource layout - never an
@@ -1082,6 +1105,11 @@ fn spawn_sidecar(app: &tauri::App) {
     });
 
     match sidecar_cmd
+        // agent-sidecar/src/server.ts reads `PORT` (default 4000) -- pass the
+        // dev/release-aware SIDECAR_PORT explicitly so the spawned process
+        // binds the port this build's frontend actually expects instead of
+        // always defaulting to 4000.
+        .env("PORT", SIDECAR_PORT.to_string())
         .args([server_js.to_string_lossy().to_string()])
         .spawn()
     {

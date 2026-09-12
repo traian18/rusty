@@ -6,8 +6,7 @@ import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
 import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
-import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
-import { SIDECAR_PORT } from "../../config/sidecar";
+import { skillGenerationService, SkillGenerationRun } from "../../services/skillGenerationService";
 
 const AVAILABLE_TOOLS = [
   { id: "read_file", label: "Read Files" },
@@ -45,7 +44,7 @@ export const SkillsTab: React.FC = () => {
   const [genDescription, setGenDescription] = useState<string>("");
   const [showSavedModal, setShowSavedModal] = useState(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  const genRunRef = useRef<SkillGenerationRun | null>(null);
 
   const selectedSkill = skills.find((s) => s.id === selectedSkillId);
 
@@ -162,38 +161,28 @@ export const SkillsTab: React.FC = () => {
       }
       const provider = resolution.provider;
 
-      try {
-        wsRef.current = createAgentHarnessSocket();
-      } catch (err: any) {
-        console.error("Failed to construct Skills WebSocket:", err);
-        setGenerateError(`WebSocket connection failed: ${err.message || String(err)}`);
+      let timedOut = false;
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        genRunRef.current?.cancel();
+        genRunRef.current = null;
         setIsGenerating(false);
-        notify(
-          "Sidecar Connection Error",
-          `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-          "error"
-        );
-        return;
-      }
+        notify("Timeout", "Skill generation request timed out after 60 seconds.", "info");
+      }, 60000);
 
-      wsRef.current.onopen = () => {
-        wsRef.current?.send(JSON.stringify({
-          type: "generate_skill",
+      genRunRef.current = skillGenerationService.generate(
+        {
           model,
           description,
           workspaceRoot: rootPath,
           customProvider: provider,
-        }));
-      };
-
-      wsRef.current.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "generate_skill_response") {
+        },
+        {
+          onComplete: (spec) => {
+            clearTimeout(timeoutHandle);
+            if (timedOut) return;
             try {
-              const generated = typeof msg.spec === "string"
-                ? JSON.parse(msg.spec)
-                : msg.spec;
+              const generated = typeof spec === "string" ? JSON.parse(spec) : spec as any;
               setEditingSkill({
                 ...editingSkill!,
                 systemPrompt: generated.systemPrompt || "",
@@ -204,39 +193,19 @@ export const SkillsTab: React.FC = () => {
               setGenerateError("Failed to parse generated skill. Please try again.");
               notify("Parse Error", "Failed to parse generated skill specification.", "error");
             }
-            wsRef.current?.close();
+            genRunRef.current = null;
             setIsGenerating(false);
-          } else if (msg.type === "generate_skill_error") {
-            setGenerateError(msg.error || "Generation failed");
-            wsRef.current?.close();
+          },
+          onError: (message) => {
+            clearTimeout(timeoutHandle);
+            if (timedOut) return;
+            setGenerateError(message);
+            genRunRef.current = null;
             setIsGenerating(false);
-            notify("Generation Error", `Skill generation failed with error: ${msg.error}`, "error");
-          }
-        } catch (err: any) {
-          setGenerateError("Invalid response from sidecar");
-          wsRef.current?.close();
-          setIsGenerating(false);
-          notify("Sidecar Communication Error", `Error processing message from sidecar: ${err.message || String(err)}`, "error");
+            notify("Generation Error", `Skill generation failed with error: ${message}`, "error");
+          },
         }
-      };
-
-      wsRef.current.onerror = () => {
-        setGenerateError("WebSocket connection failed. Is the sidecar running?");
-        setIsGenerating(false);
-        notify(
-          "Sidecar Connection Failed",
-          `Connection to agent sidecar closed unexpectedly. Ensure agent sidecar is running on port ${SIDECAR_PORT}.`,
-          "error"
-        );
-      };
-
-      setTimeout(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.close();
-          setIsGenerating(false);
-          notify("Timeout", "Skill generation request timed out after 60 seconds.", "info");
-        }
-      }, 60000);
+      );
     } catch (err: any) {
       setGenerateError(String(err));
       setIsGenerating(false);

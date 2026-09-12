@@ -67,7 +67,7 @@ import { globalExplore, stopGlobalExploration } from "./capabilities/globalExplo
 import { reconciliateEdge, stopEdgeReconciliation } from "./capabilities/reconciliateEdge";
 import { reconciliateGraph, stopGraphReconciliation } from "./capabilities/reconciliateGraph";
 import { agentChat, stopAgentChatDelegations } from "./capabilities/agentChat";
-import { generateSkill } from "./capabilities/generateSkill";
+import { generateSkill, stopSkillGeneration } from "./capabilities/generateSkill";
 import { inlineChat } from "./capabilities/inlineChat";
 import { generateTaskNodes, stopTaskNodeGeneration } from "./capabilities/generateTaskNodes";
 import { testBuild, stopTestBuild } from "./capabilities/testBuild";
@@ -549,6 +549,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         await agentChat(ws, data);
       } else if (data.type === "inline_chat") {
         await inlineChat(ws, data);
+      } else if (data.type === "generate_skill_stop") {
+        const stopped = stopSkillGeneration(data.runId);
+        safeSend(ws, { type: "generate_skill_stopped", runId: data.runId, stopped });
       } else if (data.type === "generate_skill") {
         await generateSkill(ws, data);
       } else if (data.type === "generate_task_nodes") {

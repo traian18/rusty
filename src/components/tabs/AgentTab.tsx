@@ -10,7 +10,7 @@ import { notify } from "../../notificationStore";
 import { commandPermissionService, handleCommandPermissionMessage } from "../../services/commandPermissionService";
 import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
-import { selectableProviderModels } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../../config/sidecar";
@@ -81,19 +81,28 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const lastUserMessageIdRef = useRef<string | null>(null);
   const lastConsoleMessageIdRef = useRef<string | null>(null);
 
-  const modelOptions = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
-    .map(({ model }) => ({
-      id: model.id,
-      name: `${model.name} (${model.id})`,
-    }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
+  const modelPlaceholder = modelOptions.length === 0 && unauthenticatedProviders.length > 0
+    ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")} to see more models`
+    : "Select model";
 
+  // Local-only correction (REFACTOR_PLAN.md PR 3c): if the current
+  // selection isn't in THIS tab's option list, fall back locally --
+  // this used to also call the global setActiveModel, which meant merely
+  // mounting an Agent tab (or its option list changing) could silently
+  // rewrite what every other tab defaults to. The read direction is kept:
+  // when the global activeModel changes (e.g. from LlmSetupTab, the
+  // canonical setter), this still re-derives selectedModel from it.
   useEffect(() => {
     const nextModel = modelOptions.some((option) => option.id === activeModel)
       ? activeModel
       : modelOptions[0]?.id || "";
     setSelectedModel(nextModel);
-    if (nextModel !== activeModel) setActiveModel(nextModel);
-  }, [activeCustomProviderId, activeModel, customProviders, setActiveModel]);
+  }, [activeCustomProviderId, activeModel, customProviders, providerStatus]);
 
   useEffect(() => {
     // Always ensure a skill is selected. Resolution order:
@@ -842,7 +851,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
                 setActiveModel(model);
               }}
               options={modelOptions}
-              placeholder="Select model"
+              placeholder={modelPlaceholder}
               className="w-64"
             />
             <CustomSelect

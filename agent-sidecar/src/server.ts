@@ -74,6 +74,7 @@ import { testBuild } from "./capabilities/testBuild";
 import { stopCommandsForSession } from "./services/commandExecution";
 import { clearCommandSession } from "./services/commandPermissions";
 import { resolveHarness } from "./services/harness";
+import { testMcpConnection } from "./services/mcpClient";
 import {
   getCopilotConnectionStatus,
   logoutCopilot,
@@ -197,6 +198,22 @@ app.post("/llm/quota", async (req, res) => {
   } catch (err: any) {
     console.error("LLM quota discovery error:", err?.message || err);
     res.status(502).json({ error: err?.message || "Failed to fetch provider quota." });
+  }
+});
+
+// A real connectivity test for MCP's "Test Connection" button
+// (REFACTOR_PLAN.md PR 3c) -- on demand only, never a startup step. Reuses
+// mcpClient.ts's own connect/initialize/listTools/dispose sequence, via
+// testMcpConnection (deliberately not createMcpTools, which swallows a
+// connect failure into a silent zero-tools success).
+app.post("/mcp/test", async (req, res) => {
+  try {
+    const server = req.body?.server || {};
+    const result = await testMcpConnection(server);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    console.error("MCP connection test error:", err?.message || err);
+    res.status(502).json({ error: err?.message || "MCP connection test failed." });
   }
 });
 

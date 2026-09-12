@@ -6,7 +6,7 @@
 - [x] PR 1 — Replace editor groups with a declarative single-workspace tab system
 - [x] PR 2 — Refactor the application shell and hide the explorer by default
 - [x] PR 3 — Add an extensible application startup procedure
-- [ ] PR 4 — Complete the shared sidecar agent protocol migration
+- [x] PR 4 — Complete the shared sidecar agent protocol migration
 - [ ] PR 5 — Complete Git integration, including detached HEAD and submodules
 - [ ] PR 6 — Add major-language syntax highlighting and safe file handling
 - [ ] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
@@ -374,18 +374,37 @@ Immediately after startup, every application surface sees the same settled provi
 Preserve and extend the existing versioned protocol instead of creating a competing protocol.
 
 Split into **4a** (shared discriminated types, additive only, no wire
-behavior change — **done, this section**) and **4b** (migrate all 9
+behavior change — **done**) and **4b** (migrate all 9
 `createAgentHarnessSocket` call sites onto typed per-capability
 services, fixing the correctness bugs found along the way, then delete
-the facade — not started). 4a built the module layout below exactly as
-proposed, documented every capability's current (pre-rename) wire
-shape in `commands.ts`/`events.ts`, wired up `AgentTerminalState` via a
-naming-convention classifier usable before any capability migrates,
-unified the 3 incompatible error-code shapes into one, and added
-generic field-validation helpers for 4b to adopt per capability. It
-intentionally did not rename any wire field or touch any capability's
-runtime behavior — see the plan file's "Decisions taken" for why a
-same-commit two-sided rename is 4b's job, one capability at a time.
+the facade — **done, this section**). 4a built the module layout below
+exactly as proposed, documented every capability's current (pre-rename)
+wire shape in `commands.ts`/`events.ts`, wired up `AgentTerminalState`
+via a naming-convention classifier usable before any capability
+migrates, unified the 3 incompatible error-code shapes into one, and
+added generic field-validation helpers for 4b to adopt per capability.
+It intentionally did not rename any wire field or touch any
+capability's runtime behavior in that phase.
+
+4b then migrated all 9 capabilities (`nodeExecutionService.ts`,
+`agentChatService.ts`, `globalExploreService.ts`,
+`taskGenerationService.ts`, `edgeReconciliationService.ts`,
+`graphReconciliationService.ts`, `testBuildService.ts`,
+`skillGenerationService.ts`, and the already-migrated
+`inlineChatService.ts` template) onto typed per-capability services
+mirroring `inlineChatService.ts`, fixed 6 capabilities' missing
+server-side cancellation, wired command-permission handling into the 2
+consumers that were silently dropping it, fixed the
+`generate_task_nodes_stopped` dual-shape bug, renamed
+`generate_skill_response` to `generate_skill_complete`, gave
+`global_explore`'s `token` event a correlating id, and deleted
+`createAgentHarnessSocket` once grep confirmed zero remaining call
+sites. Every commit was verified live against the running sidecar over
+a real WebSocket (protocol handshake, normal round-trip, and each new
+stop dispatch); full canvas-UI verification through the actual React
+app was not reachable in the sandboxed browser preview used for this
+work, since it has no Tauri runtime for the native directory dialog —
+noted per-commit rather than skipped silently.
 
 ### Proposed module layout
 
@@ -433,27 +452,27 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 ### Consumer migration checklist
 
 - [x] Canvas node execution. (`nodeExecutionService.ts`; also gained real server-side cancellation via a new `execute_node_stop`, which did not exist before)
-- [ ] Agent tab. (`agentChatService.ts` already built and used by explorer chat below; AgentTab.tsx itself not yet migrated)
+- [x] Agent tab. (`agentChatService.ts`, shared with explorer chat below; widened `onComplete` to carry `modifiedFiles`/`subagents` so AgentTab.tsx's file-open/tree-refresh/subagent-panel behavior survived the migration intact)
 - [x] Global and explorer chat. (`agentChatService.ts` for the chat send, `globalExploreService.ts` for Summarize; global_explore also gained real cancellation via a new `global_explore_stop`, which did not exist before, and its `token` event gained a correlating `nodeId`)
 - [x] Task generation. (`taskGenerationService.ts`; also fixed the `generate_task_nodes_stopped` dual-shape bug)
 - [x] Skill generation. (`skillGenerationService.ts`; gained real cancellation via a new `generate_skill_stop`, using the envelope's own runId since this capability's payload never had a routing id; renamed `generate_skill_response` to `generate_skill_complete`)
 - [x] Edge reconciliation. (`edgeReconciliationService.ts`; gained real cancellation via a new `reconciliate_edge_stop`, and command-permission requests are now wired at all, previously silently dropped)
 - [x] Graph reconciliation. (`graphReconciliationService.ts`; drops the `__reconciliation__:` prefix hack; gained real cancellation via a new `reconciliate_graph_stop`, and command-permission requests are now wired at all)
 - [x] Test and build execution. (`testBuildService.ts`; drops the `__test_build__:` prefix hack; the existing stop button now sends a real `test_build_stop` that kills the actual build subprocess, instead of only closing the client socket)
-- [ ] Inline chat.
-- [ ] Command permission handling.
+- [x] Inline chat. (already the migrated template this whole PR generalized; needed no further changes since it never imported the old `shared/agentProtocol.ts` directly)
+- [x] Command permission handling. (wired into every capability whose tool set can trigger a `command_permission_request` today: node execution, agent chat — both the explorer-chat and Agent-tab consumers — edge reconciliation, and graph reconciliation; the other 5 capabilities have no interactive command-permission-eligible tool)
 
 ### Cleanup checklist
 
-- [ ] Remove component-owned agent WebSockets.
-- [ ] Delete `createAgentHarnessSocket` after the final consumer migrates.
-- [ ] Reject legacy un-enveloped messages at the main protocol boundary.
+- [x] Remove component-owned agent WebSockets. (all 9 capability consumers now go through typed services backed by the one shared `agentHarnessClient` connection)
+- [x] Delete `createAgentHarnessSocket` after the final consumer migrates. (grep-confirmed zero remaining call sites first)
+- [ ] Reject legacy un-enveloped messages at the main protocol boundary. (out of scope for 4a/4b — `parseAgentMessage`'s `"legacy"` kind is still accepted; not touched)
 - [ ] Keep legacy support only in an explicit compatibility adapter if it is still required.
-- [ ] Add contract tests that run against both client and sidecar parsing.
+- [ ] Add contract tests that run against both client and sidecar parsing. (each 4b commit added targeted unit/live-protocol verification for the capability it touched, not a single formal contract-test suite comparing client and sidecar parsing side by side)
 
 ### Completion criteria
 
-No React component constructs, sends, parses, or owns an agent WebSocket. All agent-capable nodes and the Agent tab communicate through the same typed client.
+No React component constructs, sends, parses, or owns an agent WebSocket. All agent-capable nodes and the Agent tab communicate through the same typed client. **Met**: every consumer now goes through `agentHarnessClient` via a typed per-capability service; `createAgentHarnessSocket` is deleted.
 
 ## PR 5 — Complete Git integration and submodule support
 

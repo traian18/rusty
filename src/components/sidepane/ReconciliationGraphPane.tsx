@@ -14,7 +14,8 @@ import { AgentActivityCard } from "../ui/SubagentActivityPanel";
 import { useConfirm } from "../useConfirm";
 import { reconciliationService, withoutReconciliationFiles } from "../../services/reconciliationService";
 import { buildReconciliationTaskFileRecords, normalizeReconciliationPath } from "../../services/reconciliationPaths";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
+import { selectableProviderModels } from "../../store/providerHelpers";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { VfsExplorer } from "./components/VfsExplorer";
 import type { ReconciliationLedgerEntry, ReconciliationSnapshot } from "../../store/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -473,9 +474,17 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
     }
 
     socket.onopen = () => {
-      const provider = customProviders.find((candidate) =>
-        providerHasModelReference(candidate, selectedModel)
-      ) || customProviders.find((candidate) => candidate.id === activeCustomProviderId);
+      const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, selectedModel);
+      if (!resolution.ok) {
+        addConsoleLog(resolution.message);
+        setConsoleStatus("error");
+        appendChatMessage({ role: "system", content: resolution.message });
+        setIsReconciling(false);
+        notify("Cannot reconcile", resolution.message, "error");
+        socket.close();
+        return;
+      }
+      const provider = resolution.provider;
       addConsoleLog(userMsgText
         ? `Connected to sidecar. Asking the model to adjust ${pendingPaths[0]}.`
         : `Connected to sidecar. Dispatching ${pendingPaths.length} pending collision case${pendingPaths.length === 1 ? "" : "s"}; completed ledger entries are skipped.`);
@@ -491,7 +500,7 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
           fileSources: runFileSources,
           chatHistory: nextMessages.map(m => ({ role: m.role, content: m.content })),
           userMessage: userMsgText || "",
-          customProvider: provider || null,
+          customProvider: provider,
         })
       );
     };
@@ -812,8 +821,15 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
       return;
     }
 
-    const provider = customProviders.find((c) => providerHasModelReference(c, selectedModel))
-      || customProviders.find((c) => c.id === activeCustomProviderId);
+    const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, selectedModel);
+    if (!resolution.ok) {
+      await restoreDisk();
+      setIsTesting(false);
+      notify("Cannot test build", resolution.message, "error");
+      socket.close();
+      return;
+    }
+    const provider = resolution.provider;
 
     socket.onopen = () => {
       addConsoleLog(`Connected. Running: ${buildCommand}`);
@@ -824,7 +840,7 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
         workspaceRoot: rootPath,
         reconciledFiles: allApplyFiles,
         model: selectedModel,
-        customProvider: provider || null,
+        customProvider: provider,
       }));
     };
 

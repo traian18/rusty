@@ -11,6 +11,30 @@ import {
 import type { WorkspaceSliceCreator } from "../sliceTypes";
 import type { CustomProvider, LspSettings, Skill, WorkspaceState } from "../types";
 
+/**
+ * Coalesces every saveSecureConfig trigger within the same tick into one
+ * write, instead of the one-`setTimeout(…, 0)`-per-call-site pattern this
+ * replaces (REFACTOR_PLAN.md PR 3b). saveSecureConfig writes the ENTIRE
+ * encrypted blob through PBKDF2 at 100,000 iterations
+ * (services/secureStorageService.ts) -- before this fix, a single "Fetch
+ * models" click scheduled two full rewrites (updateProviderSettings, then
+ * setActiveModel), and PR 3b's background provider/model discovery would
+ * otherwise multiply that into a rewrite storm at every launch. Keyed by
+ * `get` (stable per store instance, one per app) via a WeakMap rather than
+ * a bare module-level timer, so multiple test stores created in the same
+ * process never share a pending timer.
+ */
+const pendingSaveTimers = new WeakMap<() => WorkspaceState, ReturnType<typeof setTimeout>>();
+
+function scheduleSaveSecureConfig(get: () => WorkspaceState): void {
+  if (pendingSaveTimers.has(get)) return;
+  const timer = setTimeout(() => {
+    pendingSaveTimers.delete(get);
+    void get().saveSecureConfig();
+  }, 0);
+  pendingSaveTimers.set(get, timer);
+}
+
 /** Matches src/theme.ts's own default (`themes.spaceDust`); a bare string
  * literal here rather than an import + resolveTheme() call, matching this
  * file's existing `activeCustomProviderId: "opencode"` precedent -- the
@@ -137,7 +161,7 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   pendingWorkspaceRestorePath: null,
 
   updateLspSettings: (settings) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { lspSettings: { ...state.lspSettings, ...settings } };
   }),
 
@@ -180,31 +204,31 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
 
   setMcpServers: (mcpServers) => {
     set({ mcpServers });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
   addMcpServer: (server) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers: { ...state.mcpServers, [server.name]: server } };
   }),
   updateMcpServer: (name, updates) => set((state) => {
     const existing = state.mcpServers[name];
     if (!existing) return {};
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers: { ...state.mcpServers, [name]: { ...existing, ...updates } } };
   }),
   removeMcpServer: (name) => set((state) => {
     const mcpServers = { ...state.mcpServers };
     delete mcpServers[name];
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers };
   }),
 
   addCustomProvider: (provider) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { customProviders: [...state.customProviders.filter((item) => item.id !== provider.id), provider] };
   }),
   updateProviderSettings: (providerId, settings) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return {
       customProviders: state.customProviders.map((provider) =>
         provider.id === providerId ? { ...provider, ...settings } : provider,
@@ -213,11 +237,11 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   }),
   setActiveCustomProviderId: (activeCustomProviderId) => {
     set({ activeCustomProviderId });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
   setActiveModel: (activeModel) => {
     set({ activeModel });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
 
   setActiveThemeId: (themeId) => {
@@ -236,8 +260,9 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
     const state = get();
     // Guards against a real data-loss bug: saveSecureConfig writes the
     // ENTIRE snapshot (providers/API keys/lastWorkspacePath/MCP servers),
-    // and nine call sites in this file fire it via setTimeout on nearly
-    // every settings mutation. Before loadSecureConfig has completed (or
+    // and nine call sites in this file schedule it (via
+    // scheduleSaveSecureConfig, above) on nearly every settings mutation.
+    // Before loadSecureConfig has completed (or
     // if it failed and the user clicked "Continue anyway"), the store is
     // still holding defaultProviders with empty apiKeys and rootPath: "" --
     // writing that over a real, previously-saved encrypted blob would

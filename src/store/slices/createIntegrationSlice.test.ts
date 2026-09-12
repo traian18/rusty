@@ -186,3 +186,89 @@ describe("createIntegrationSlice: secureConfigLoaded guard (the data-loss fix, R
     expect(SecureStorageService.saveSecureData).not.toHaveBeenCalled();
   });
 });
+
+describe("createIntegrationSlice: scheduleSaveSecureConfig coalescing (REFACTOR_PLAN.md PR 3b)", () => {
+  beforeEach(() => {
+    vi.mocked(SecureStorageService.loadSecureData).mockReset();
+    vi.mocked(SecureStorageService.saveSecureData).mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function loadedStore() {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue(null);
+    const testStore = createIntegrationTestStore();
+    await testStore.getState().loadSecureConfig();
+    return testStore;
+  }
+
+  it("coalesces two mutations scheduled in the same tick into a single save -- the fix for handleFetchModels's old two-write click (updateProviderSettings, then setActiveModel)", async () => {
+    const testStore = await loadedStore();
+
+    // Mirrors LlmSetupTab's handleFetchModels: updateProviderSettings(...)
+    // immediately followed by setActiveModel(...), synchronously.
+    testStore.getState().updateProviderSettings("opencode", { apiKey: "new-key" });
+    testStore.getState().setActiveModel("opencode/some-model");
+
+    await vi.runAllTimersAsync();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(1);
+  });
+
+  it("still saves once per mutation when they happen in separate ticks", async () => {
+    const testStore = await loadedStore();
+
+    testStore.getState().setActiveModel("opencode/model-a");
+    await vi.runAllTimersAsync();
+    testStore.getState().setActiveModel("opencode/model-b");
+    await vi.runAllTimersAsync();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces across different mutation kinds (provider settings + mcp servers) in the same tick", async () => {
+    const testStore = await loadedStore();
+
+    testStore.getState().updateProviderSettings("opencode", { apiKey: "k" });
+    testStore.getState().setMcpServers({});
+    testStore.getState().updateLspSettings({ enabled: false });
+
+    await vi.runAllTimersAsync();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves reflect the LATEST state, not a stale snapshot from when the first mutation scheduled it", async () => {
+    const testStore = await loadedStore();
+
+    testStore.getState().setActiveCustomProviderId("anthropic");
+    testStore.getState().setActiveModel("anthropic/claude-opus-4-6");
+
+    await vi.runAllTimersAsync();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(1);
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledWith(
+      "rusty_secure_config",
+      expect.objectContaining({
+        activeCustomProviderId: "anthropic",
+        activeModel: "anthropic/claude-opus-4-6",
+      }),
+    );
+  });
+
+  it("two independent store instances never share a pending timer", async () => {
+    const storeA = await loadedStore();
+    const storeB = await loadedStore();
+    vi.mocked(SecureStorageService.saveSecureData).mockClear();
+
+    storeA.getState().setActiveModel("a-model");
+    storeB.getState().setActiveModel("b-model");
+
+    await vi.runAllTimersAsync();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(2);
+  });
+});

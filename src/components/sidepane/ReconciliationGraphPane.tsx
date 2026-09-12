@@ -19,7 +19,8 @@ import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { VfsExplorer } from "./components/VfsExplorer";
 import type { ReconciliationLedgerEntry, ReconciliationSnapshot } from "../../store/types";
 import { invoke } from "@tauri-apps/api/core";
-import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
+import { graphReconciliationService, GraphReconciliationRun } from "../../services/graphReconciliationService";
+import { testBuildService, TestBuildRun } from "../../services/testBuildService";
 import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
 
 
@@ -57,10 +58,11 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
   const [chatFilePath, setChatFilePath] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [buildCommand, setBuildCommand] = useState(() => localStorage.getItem(`rusty_build_command_${tabId}`) || "");
-  const testSocketRef = useRef<WebSocket | null>(null);
+  const testRunRef = useRef<TestBuildRun | null>(null);
+  const testBuildRestoreRef = useRef<(() => Promise<void>) | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const socketRef = useRef<WebSocket | null>(null);
+  const reconciliationRunRef = useRef<GraphReconciliationRun | null>(null);
   const { confirm, ConfirmModalComponent } = useConfirm();
   const reconciliationStreamId = getReconciliationStreamId(tabId);
   const reconciliationNodeId = reconciliationService.getNodeId(tabId);
@@ -355,13 +357,12 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
   const handleStopReconciliation = () => {
     addConsoleLog("Stop requested by user.");
     setConsoleStatus("idle");
-    if (socketRef.current) {
-      if (socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify({ type: "agent_chat_stop", tabId: reconciliationStreamId }));
-      }
-      socketRef.current.close(1000, "User requested stop");
-      socketRef.current = null;
-    }
+    // Previously sent agent_chat_stop -- the wrong capability's stop message,
+    // a no-op for a reconciliate_graph run. Now a real reconciliate_graph_stop
+    // (see agent-sidecar/src/capabilities/reconciliateGraph.ts's
+    // stopGraphReconciliation), via the run handle's own cancel().
+    reconciliationRunRef.current?.cancel();
+    reconciliationRunRef.current = null;
     setIsReconciling(false);
     appendChatMessage({ role: "system", content: "Reconciliation stopped by user." });
   };
@@ -375,9 +376,7 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
     });
 
     return () => {
-      if (socketRef.current) {
-        socketRef.current.close(1000, "Pane unmounted");
-      }
+      reconciliationRunRef.current?.cancel();
     };
   }, [tabId]);
 
@@ -460,109 +459,49 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
       setActiveTab("console");
     }
 
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      socketRef.current = socket;
-    } catch (err: any) {
-      console.error("Failed to construct WebSocket:", err);
-      addConsoleLog(`Connection failed: ${err.message || String(err)}`);
+    const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, selectedModel);
+    if (!resolution.ok) {
+      addConsoleLog(resolution.message);
       setConsoleStatus("error");
-      appendChatMessage({ role: "system", content: `Connection failed: ${err.message || String(err)}` });
+      appendChatMessage({ role: "system", content: resolution.message });
       setIsReconciling(false);
+      notify("Cannot reconcile", resolution.message, "error");
       return;
     }
+    const provider = resolution.provider;
+    addConsoleLog(userMsgText
+      ? `Connected to sidecar. Asking the model to adjust ${pendingPaths[0]}.`
+      : `Connected to sidecar. Dispatching ${pendingPaths.length} pending collision case${pendingPaths.length === 1 ? "" : "s"}; completed ledger entries are skipped.`);
 
-    socket.onopen = () => {
-      const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, selectedModel);
-      if (!resolution.ok) {
-        addConsoleLog(resolution.message);
-        setConsoleStatus("error");
-        appendChatMessage({ role: "system", content: resolution.message });
-        setIsReconciling(false);
-        notify("Cannot reconcile", resolution.message, "error");
-        socket.close();
-        return;
-      }
-      const provider = resolution.provider;
-      addConsoleLog(userMsgText
-        ? `Connected to sidecar. Asking the model to adjust ${pendingPaths[0]}.`
-        : `Connected to sidecar. Dispatching ${pendingPaths.length} pending collision case${pendingPaths.length === 1 ? "" : "s"}; completed ledger entries are skipped.`);
-
-      socket.send(
-        JSON.stringify({
-          type: "reconciliate_graph",
-          tabId,
-          model: selectedModel,
-          nodes: formattedNodes,
-          workspaceRoot: rootPath,
-          duplicateFiles: filesToReconcile,
-          fileSources: runFileSources,
-          chatHistory: nextMessages.map(m => ({ role: m.role, content: m.content })),
-          userMessage: userMsgText || "",
-          customProvider: provider,
-        })
-      );
-    };
-
-    let messageQueue = Promise.resolve();
-    socket.onmessage = (event) => {
-      // Ledger updates must be committed in wire order. Without this queue,
-      // several async per-file messages can read and overwrite the same
-      // snapshot concurrently.
-      messageQueue = messageQueue.then(async () => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (msg.type === "log") {
-          addConsoleLog(msg.message);
-          return;
-        }
-
-        if (msg.type === "usage_update" && msg.nodeId === reconciliationStreamId) {
-          setRunUsage(msg.usage);
-          return;
-        }
-
-        if (msg.type === "read_file") {
-          console.log(`[ReconciliateGraph] Sidecar reading file: ${msg.path}`);
-          VfsRegistry.getOrCreate(tabId).readFile(msg.path)
-            .then((content) => {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "read_file_response", requestId: msg.requestId, content }));
-              }
-            })
-            .catch((err) => {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "read_file_response", requestId: msg.requestId, error: err.message || String(err) }));
-              }
-            });
-          return;
-        }
-
-        if (msg.type === "write_file") {
-          console.log(`[ReconciliateGraph] Sidecar writing file: ${msg.path}`);
-          VfsRegistry.getOrCreate(tabId).writeFile(
-            msg.path,
-            msg.content,
-            reconciliationNodeId
-          )
-            .then(() => {
-              useWorkspaceStore.getState().updateCanvasContext(tabId, { isPipelineApplied: false });
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_file_response", requestId: msg.requestId }));
-              }
-            })
-            .catch((err) => {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_file_response", requestId: msg.requestId, error: err.message || String(err) }));
-              }
-            });
-          return;
-        }
-
-        if (msg.type === "reconciliation_file_complete") {
-          const filePath = String(msg.filePath || "");
+    const run = graphReconciliationService.send(
+      {
+        tabId,
+        model: selectedModel,
+        nodes: formattedNodes,
+        workspaceRoot: rootPath,
+        duplicateFiles: filesToReconcile,
+        fileSources: runFileSources,
+        chatHistory: nextMessages.map(m => ({ role: m.role, content: m.content })),
+        userMessage: userMsgText || "",
+        customProvider: provider,
+      },
+      {
+        onLog: (message) => {
+          addConsoleLog(message);
+        },
+        onUsage: (usage) => {
+          setRunUsage(usage as TokenUsageLike);
+        },
+        onReadFile: (path) => {
+          console.log(`[ReconciliateGraph] Sidecar reading file: ${path}`);
+          return VfsRegistry.getOrCreate(tabId).readFile(path);
+        },
+        onWriteFile: async (path, content) => {
+          console.log(`[ReconciliateGraph] Sidecar writing file: ${path}`);
+          await VfsRegistry.getOrCreate(tabId).writeFile(path, content, reconciliationNodeId);
+          useWorkspaceStore.getState().updateCanvasContext(tabId, { isPipelineApplied: false });
+        },
+        onFileComplete: async ({ filePath, taskIds, modified, response }) => {
           if (!filePath) return;
           const content = await VfsRegistry.getOrCreate(tabId).readFile(filePath);
           const currentSnapshot = useWorkspaceStore.getState().canvasContexts[tabId]?.reconciliationSnapshot;
@@ -572,11 +511,11 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
             path: filePath,
             status: "reconciled",
             sourceSignature: taskFileRecords[filePath]?.sourceSignature || "unknown",
-            taskIds: Array.isArray(msg.taskIds) ? msg.taskIds : taskFileRecords[filePath]?.taskIds || [],
+            taskIds: Array.isArray(taskIds) ? taskIds : taskFileRecords[filePath]?.taskIds || [],
             updatedAt: new Date().toISOString(),
-            modified: !!msg.modified,
+            modified,
             method: "model",
-            response: msg.response || undefined,
+            response: response || undefined,
           };
           const files = Array.from(new Set([...currentSnapshot.files, filePath]));
           useWorkspaceStore.getState().updateCanvasContext(tabId, {
@@ -597,11 +536,8 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
           addConsoleLog(`Ledger recorded: ${filePath}`);
           void import("../tabs/canvas/services/canvasFileService")
             .then(({ canvasFileService }) => canvasFileService.autoSaveCanvas(tabId));
-          return;
-        }
-
-        if (msg.type === "reconciliation_file_error") {
-          const filePath = String(msg.filePath || "");
+        },
+        onFileError: async ({ filePath, taskIds, error }) => {
           if (!filePath) return;
           await reconciliationService.removeFiles(tabId, [filePath]);
           const currentSnapshot = useWorkspaceStore.getState().canvasContexts[tabId]?.reconciliationSnapshot;
@@ -611,9 +547,9 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
               path: filePath,
               status: "error",
               sourceSignature: taskFileRecords[filePath]?.sourceSignature || "unknown",
-              taskIds: Array.isArray(msg.taskIds) ? msg.taskIds : taskFileRecords[filePath]?.taskIds || [],
+              taskIds: Array.isArray(taskIds) ? taskIds : taskFileRecords[filePath]?.taskIds || [],
               updatedAt: new Date().toISOString(),
-              error: msg.error || "Unknown reconciliation error",
+              error: error || "Unknown reconciliation error",
             };
             const generatedFileContents = { ...currentSnapshot.generatedFileContents };
             delete generatedFileContents[filePath];
@@ -630,20 +566,17 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
             });
             setReconciledFiles(files);
           }
-          addConsoleLog(`Ledger error for ${filePath}: ${msg.error}`);
+          addConsoleLog(`Ledger error for ${filePath}: ${error}`);
           void import("../tabs/canvas/services/canvasFileService")
             .then(({ canvasFileService }) => canvasFileService.autoSaveCanvas(tabId));
-          return;
-        }
-
-        if (msg.type === "reconciliation_graph_complete") {
-          const completedThisRun = Array.isArray(msg.reconciledFiles) ? msg.reconciledFiles : [];
+        },
+        onComplete: async ({ response, reconciledFiles: completedThisRun, modifiedFiles }) => {
           const currentSnapshot = useWorkspaceStore.getState().canvasContexts[tabId]?.reconciliationSnapshot;
           if (currentSnapshot) {
             useWorkspaceStore.getState().updateCanvasContext(tabId, {
               reconciliationSnapshot: {
                 ...currentSnapshot,
-                response: msg.response || "Reconciliation complete.",
+                response,
                 updatedAt: new Date().toISOString(),
               },
               isPipelineApplied: false,
@@ -653,15 +586,16 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
           setReconciledFiles(allReconciledFiles);
           const finalizedCount = allReconciledFiles.length;
           const completedCount = completedThisRun.length;
-          const modifiedCount = Array.isArray(msg.modifiedFiles) ? msg.modifiedFiles.length : 0;
+          const modifiedCount = modifiedFiles.length;
           addConsoleLog(
             userMsgText
               ? `Adjustment complete for ${pendingPaths[0]}; ${finalizedCount} total reconciled file${finalizedCount === 1 ? "" : "s"} remain in the ledger.`
               : `Run complete: ${completedCount} pending collision case${completedCount === 1 ? "" : "s"} recorded; ${finalizedCount} total reconciled file${finalizedCount === 1 ? "" : "s"} in the ledger.`,
           );
           setConsoleStatus("success");
-          appendChatMessage({ role: "assistant", content: msg.response || "Reconciliation complete." });
+          appendChatMessage({ role: "assistant", content: response });
           setIsReconciling(false);
+          reconciliationRunRef.current = null;
           notify(
             userMsgText ? "Reconciliation Adjustment Complete" : "Reconciliation Complete",
             userMsgText
@@ -673,56 +607,42 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
             .then(({ canvasFileService }) => canvasFileService.autoSaveCanvas(tabId))
             .catch((err) => console.error("Failed to auto-save reconciliation VFS:", err));
           loadDuplicates();
-          socket.close();
-        }
-
-        if (msg.type === "reconciliation_graph_error") {
-          addConsoleLog(`Reconciliation stopped${msg.filePath ? ` at ${msg.filePath}` : ""}: ${msg.error}`);
+        },
+        onError: ({ message, filePath }) => {
+          addConsoleLog(`Reconciliation stopped${filePath ? ` at ${filePath}` : ""}: ${message}`);
           setConsoleStatus("error");
-          appendChatMessage({ role: "assistant", content: `Error${msg.filePath ? ` in ${msg.filePath}` : ""}: ${msg.error}` });
+          appendChatMessage({ role: "assistant", content: `Error${filePath ? ` in ${filePath}` : ""}: ${message}` });
           setIsReconciling(false);
+          reconciliationRunRef.current = null;
           notify(
             "Reconciliation Stopped",
-            msg.filePath
-              ? `${msg.filePath.split(/[\\/]/).pop() || msg.filePath} remains in Error. Run reconciliation again to restart from that file.`
-              : `Error aligning: ${msg.error}`,
+            filePath
+              ? `${filePath.split(/[\\/]/).pop() || filePath} remains in Error. Run reconciliation again to restart from that file.`
+              : `Error aligning: ${message}`,
             "error",
           );
-          socket.close();
-        }
-      } catch (err: any) {
-        console.error("[ReconciliationGraph] parse error:", err);
-        addConsoleLog(`Message parse error: ${err.message || String(err)}`);
+        },
       }
-      });
-    };
-
-    socket.onerror = (error) => {
-      console.error("[ReconciliationGraph] WebSocket error:", error);
-      addConsoleLog("WebSocket connection failed.");
-      setConsoleStatus("error");
-      appendChatMessage({ role: "system", content: "Error: WebSocket connection failed." });
-      setIsReconciling(false);
-    };
-
-    socket.onclose = () => {
-      const currentStatus = useWorkspaceStore.getState().canvasContexts[tabId]?.nodeStatus[reconciliationStreamId];
-      if (currentStatus === "running") {
-        addConsoleLog("Connection closed before reconciliation completed.");
-        setConsoleStatus("error");
-      }
-      setIsReconciling(false);
-    };
+    );
+    reconciliationRunRef.current = run;
   };
 
   const handleStopTestBuild = () => {
     addConsoleLog("Test build stopped by user.");
-    if (testSocketRef.current) {
-      if (testSocketRef.current.readyState === WebSocket.OPEN) {
-        testSocketRef.current.close(1000, "User requested stop");
-      }
-      testSocketRef.current = null;
-    }
+    // Previously just closed the client's own socket -- no stop message ever
+    // reached the sidecar, so the build subprocess and any in-flight model
+    // fix-attempt kept running (see testBuildService.ts's header for the
+    // real fix). Disk restoration must now be called explicitly here too:
+    // it used to piggyback on the socket's onclose firing for any reason,
+    // including this button, but cancel() no longer closes any socket of its
+    // own now that every capability shares one connection.
+    testRunRef.current?.cancel();
+    testRunRef.current = null;
+    void testBuildRestoreRef.current?.().then(() => {
+      addConsoleLog("Disk restored.");
+      notify("Test Build Stopped", "Disk has been restored to its pre-test state.", "info");
+    });
+    testBuildRestoreRef.current = null;
     setIsTesting(false);
   };
 
@@ -777,9 +697,7 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
       return;
     }
 
-    let diskRestored = false;
     const restoreDisk = async (finalFiles?: Record<string, string>) => {
-      diskRestored = true;
       // Update VFS and snapshot with model-fixed content (if any)
       if (finalFiles && Object.keys(finalFiles).length > 0) {
         const snapshot = useWorkspaceStore.getState().canvasContexts[tabId]?.reconciliationSnapshot;
@@ -806,112 +724,68 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
           console.error(`[TestBuild] Failed to restore disk file ${filePath}:`, err);
         }
       }
-      addConsoleLog("Disk restored.");
     };
-
-    // 3. Open WebSocket and start test build
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      testSocketRef.current = socket;
-    } catch (err: any) {
-      await restoreDisk();
-      setIsTesting(false);
-      notify("Test Build Failed", `Connection error: ${err.message}`, "error");
-      return;
-    }
+    testBuildRestoreRef.current = () => restoreDisk();
 
     const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, selectedModel);
     if (!resolution.ok) {
       await restoreDisk();
+      testBuildRestoreRef.current = null;
       setIsTesting(false);
       notify("Cannot test build", resolution.message, "error");
-      socket.close();
       return;
     }
     const provider = resolution.provider;
 
-    socket.onopen = () => {
-      addConsoleLog(`Connected. Running: ${buildCommand}`);
-      socket.send(JSON.stringify({
-        type: "test_build",
+    addConsoleLog(`Connected. Running: ${buildCommand}`);
+    const run = testBuildService.run(
+      {
         tabId,
         buildCommand,
         workspaceRoot: rootPath,
         reconciledFiles: allApplyFiles,
         model: selectedModel,
         customProvider: provider,
-      }));
-    };
-
-    socket.onmessage = (event) => {
-      void (async () => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          if (msg.type === "test_build_log") {
-            addConsoleLog(msg.message);
-            return;
-          }
-
-          if (msg.type === "test_build_iteration") {
-            addConsoleLog(`\n=== Build attempt ${msg.attempt}/${msg.maxAttempts} ===`);
-            return;
-          }
-
-          if (msg.type === "test_build_complete") {
-            await restoreDisk(msg.finalFiles);
-            setIsTesting(false);
-            testSocketRef.current = null;
-            socket.close();
-            if (msg.success) {
-              notify(
-                "Test Build Passed",
-                `Build succeeded after ${msg.attempts} attempt${msg.attempts === 1 ? "" : "s"}. Disk restored. You can now Apply Rusty to permanently write the working code.`,
-                "success",
-              );
-            } else {
-              notify(
-                "Test Build Failed",
-                `Build did not pass after ${msg.attempts} attempts. Model's best attempt is saved in the VFS. Check console for details.`,
-                "error",
-              );
-            }
-            return;
-          }
-
-          if (msg.type === "test_build_error") {
-            addConsoleLog(`Error: ${msg.error}`);
-            await restoreDisk();
-            setIsTesting(false);
-            testSocketRef.current = null;
-            socket.close();
-            notify("Test Build Error", msg.error, "error");
-            return;
-          }
-        } catch (err: any) {
-          console.error("[TestBuild] Message parse error:", err);
-        }
-      })();
-    };
-
-    socket.onerror = () => {
-      addConsoleLog("WebSocket connection failed.");
-      void restoreDisk().then(() => setIsTesting(false));
-    };
-
-    socket.onclose = () => {
-      if (!diskRestored) {
-        addConsoleLog("Test build stopped. Restoring disk...");
-        void restoreDisk().then(() => {
+      },
+      {
+        onLog: (message) => {
+          addConsoleLog(message);
+        },
+        onIteration: (attempt, maxAttempts) => {
+          addConsoleLog(`\n=== Build attempt ${attempt}/${maxAttempts} ===`);
+        },
+        onComplete: async ({ success, attempts, finalFiles }) => {
+          await restoreDisk(finalFiles);
           addConsoleLog("Disk restored.");
           setIsTesting(false);
-          notify("Test Build Stopped", "Disk has been restored to its pre-test state.", "info");
-        });
-      } else {
-        setIsTesting(false);
+          testRunRef.current = null;
+          testBuildRestoreRef.current = null;
+          if (success) {
+            notify(
+              "Test Build Passed",
+              `Build succeeded after ${attempts} attempt${attempts === 1 ? "" : "s"}. Disk restored. You can now Apply Rusty to permanently write the working code.`,
+              "success",
+            );
+          } else {
+            notify(
+              "Test Build Failed",
+              `Build did not pass after ${attempts} attempts. Model's best attempt is saved in the VFS. Check console for details.`,
+              "error",
+            );
+          }
+        },
+        onError: async (message) => {
+          addConsoleLog(`Error: ${message}`);
+          await restoreDisk();
+          addConsoleLog("Disk restored.");
+          setIsTesting(false);
+          testRunRef.current = null;
+          testBuildRestoreRef.current = null;
+          notify("Test Build Error", message, "error");
+        },
       }
-    };
+    );
+    testRunRef.current = run;
   };
 
   const handleSendChat = () => {

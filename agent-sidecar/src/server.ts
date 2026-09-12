@@ -65,12 +65,12 @@ import { executeNode } from "./capabilities/executeNode";
 import { stopPiAgentRun } from "./services/piAgentChat";
 import { globalExplore, stopGlobalExploration } from "./capabilities/globalExplore";
 import { reconciliateEdge, stopEdgeReconciliation } from "./capabilities/reconciliateEdge";
-import { reconciliateGraph } from "./capabilities/reconciliateGraph";
+import { reconciliateGraph, stopGraphReconciliation } from "./capabilities/reconciliateGraph";
 import { agentChat, stopAgentChatDelegations } from "./capabilities/agentChat";
 import { generateSkill } from "./capabilities/generateSkill";
 import { inlineChat } from "./capabilities/inlineChat";
 import { generateTaskNodes, stopTaskNodeGeneration } from "./capabilities/generateTaskNodes";
-import { testBuild } from "./capabilities/testBuild";
+import { testBuild, stopTestBuild } from "./capabilities/testBuild";
 import { stopCommandsForSession } from "./services/commandExecution";
 import { clearCommandSession } from "./services/commandPermissions";
 import { resolveHarness } from "./services/harness";
@@ -540,6 +540,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         safeSend(ws, { type: "reconciliate_edge_stopped", edgeId: data.edgeId, stopped });
       } else if (data.type === "reconciliate_edge") {
         await reconciliateEdge(ws, data);
+      } else if (data.type === "reconciliate_graph_stop") {
+        const stopped = stopGraphReconciliation(data.tabId);
+        safeSend(ws, { type: "reconciliate_graph_stopped", tabId: data.tabId, stopped });
       } else if (data.type === "reconciliate_graph") {
         await reconciliateGraph(ws, data);
       } else if (data.type === "agent_chat") {
@@ -553,6 +556,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       } else if (data.type === "generate_task_nodes_stop") {
         const stopped = stopTaskNodeGeneration(data.requestId);
         safeSend(ws, { type: "generate_task_nodes_stopped", requestId: data.requestId, nodeId: data.nodeId, stopped });
+      } else if (data.type === "test_build_stop") {
+        const stopped = stopTestBuild(data.tabId);
+        safeSend(ws, { type: "test_build_stopped", tabId: data.tabId, stopped });
       } else if (data.type === "test_build") {
         await testBuild(ws, data);
       } else if (data.type === "command_session_close") {

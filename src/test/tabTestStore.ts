@@ -9,12 +9,15 @@ import type { WorkspaceState } from "../store/types";
  * and createAgentSlice imports nothing at all. Neither touches Tauri's
  * `invoke`, localStorage, or agentHarnessClient.
  *
- * Deliberately does NOT import the composed src/store.ts: that graph throws
- * at import time under a bare node environment (createIntegrationSlice.ts
- * calls loadStoredThemeId() -> localStorage.getItem with no guard) and, even
- * under jsdom, would open a websocket via createMetricsSlice's
- * agentHarnessClient.subscribeAll(). Testing the tab/editor behavior should
- * not require standing up (or mocking) any of that.
+ * Deliberately does NOT import the composed src/store.ts. As of
+ * REFACTOR_PLAN.md PR 3a's slice import-time purity fixes, that graph no
+ * longer THROWS at import time under a bare node environment (verified
+ * directly) or opens a websocket at import time either -- but composing only
+ * the slices under test is still the right call for test isolation: a
+ * narrower module graph with no incidental coupling to
+ * agentHarnessClient/secureStorageService/Tauri's invoke. Testing the
+ * tab/editor behavior should not require standing up (or mocking) any of
+ * that, whether or not it happens to be safe to import.
  *
  * The `as unknown as WorkspaceState` cast mirrors the one already at
  * src/store.ts:20 -- WorkspaceSliceCreator returns Partial<WorkspaceState>,

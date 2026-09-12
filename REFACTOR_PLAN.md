@@ -243,9 +243,24 @@ The workspace occupies the main window, no split affordance remains, and explore
 
 ## PR 3 — Extensible application startup procedure
 
+Split mid-PR into **3a** (the startup coordinator itself: the executor,
+sidecar health, secure config, workspace restore, timeouts, degraded/retry
+— everything below that's ticked) and **3b** (the provider/integration
+registry: cached catalogs, managed auth, model discovery, MCP validation,
+background refreshers, and consolidating `LlmSetupTab`'s polling and every
+model selector onto one source). 3b is meaningless until 3a's coordinator
+exists to hang its steps on; it is not yet planned or started. This PR's
+top-level checklist stays incomplete until 3b lands too.
+
 ### Startup state
 
+Implemented as a discriminated union, not the flat phase-name union
+originally drafted below — see ARCHITECTURE.md's "The startup coordinator"
+for why (a flat union can't express "running, at the workspace step, with
+the sidecar step already degraded"):
+
 ```ts
+// As originally drafted here:
 type StartupPhase =
   | "idle"
   | "sidecar"
@@ -255,46 +270,72 @@ type StartupPhase =
   | "ready"
   | "degraded"
   | "failed";
+
+// As actually implemented (src/startup/types.ts):
+type StartupState =
+  | { status: "idle" }
+  | { status: "running"; stepId: StepId; message: string; done: number; total: number }
+  | { status: "ready" }
+  | { status: "degraded"; failures: StepOutcome[] }
+  | { status: "failed"; stepId: StepId; error: unknown };
 ```
 
 ### Checklist
 
-- [ ] Create a bootstrap coordinator independent of `App.tsx`.
-- [ ] Start and health-check the sidecar.
-- [ ] Load secure configuration and preferences.
-- [ ] Load cached provider catalogs immediately.
-- [ ] Check Codex, Claude Code, and Copilot authentication concurrently.
-- [ ] Discover or refresh models for every configured provider with bounded concurrency.
-- [ ] Load MCP configuration.
-- [ ] Validate configured MCP servers where startup validation is appropriate.
-- [ ] Restore the last workspace.
-- [ ] Load skills for the restored workspace.
-- [ ] Discover repositories and load Git status.
-- [ ] Load usage metrics.
-- [ ] Mark startup ready only after all integration checks have settled.
-- [ ] Add per-operation timeouts and cancellation.
-- [ ] Add Retry and Continue in degraded mode actions.
-- [ ] Start background provider-status and quota refreshers.
-- [ ] Remove integration status polling from the lifecycle of `LlmSetupTab`.
-- [ ] Store provider status globally as `unknown`, `loading`, `ready`, `unauthenticated`, or `error`.
-- [ ] Make every model selector consume the same global integration registry.
+- [x] Create a bootstrap coordinator independent of `App.tsx`. (3a — `runStartup` + `AppBootstrapBoundary`.)
+- [x] Start and health-check the sidecar. (3a — `startupSteps.ts`'s bounded `pollSidecarHealth`; also fixed a real dev-port mismatch that made the bundled sidecar unreachable in `npm run tauri dev` — see deviations.)
+- [x] Load secure configuration and preferences. (3a.)
+- [ ] Load cached provider catalogs immediately. (3b.)
+- [ ] Check Codex, Claude Code, and Copilot authentication concurrently. (3b.)
+- [ ] Discover or refresh models for every configured provider with bounded concurrency. (3b.)
+- [x] Load MCP configuration. (3a — restored as part of `loadSecureConfig`, unchanged from before this PR.)
+- [ ] Validate configured MCP servers where startup validation is appropriate. (3b — no sidecar route for this exists yet either.)
+- [x] Restore the last workspace. (3a — `workspace-restore` step; non-destructive, unlike `setRootPath`.)
+- [x] Load skills for the restored workspace. (3a — via `loadWorkspaceData`, shared with `setRootPath`.)
+- [~] Discover repositories and load Git status. (3a loads git **status** for the restored workspace via `loadWorkspaceData`. Repository **discovery** — `git_scan_subprojects` — stays lazy, triggered only by opening the Source Control drawer, same as before this PR; moving it to startup was never in 3a's scope and isn't decided for 3b either.)
+- [x] Load usage metrics. (3a — via `loadWorkspaceData`; this is the fix for the "restored workspace never loads metrics" bug this PR's context section opens with.)
+- [~] Mark startup ready only after all integration checks have settled. (The *principle* — settled means resolved, timed out, or skipped, never "succeeded"; startup blocks until every registered step reaches one of those — is implemented in 3a and applies automatically to whatever steps 3b adds. No integration checks exist to settle yet.)
+- [x] Add per-operation timeouts and cancellation. (3a — every `startupSteps.ts` step has a budget; `runStartup`'s global deadline truncates them; `llmIntegrationService.request()` also gained per-endpoint timeouts, ahead of 3b's provider steps that will need them.)
+- [x] Add Retry and Continue in degraded mode actions. (3a — Retry re-runs only the non-"ok" sub-DAG; "Continue without waiting" (pending) and "Continue anyway" (failed) both exist.)
+- [ ] Start background provider-status and quota refreshers. (3b.)
+- [ ] Remove integration status polling from the lifecycle of `LlmSetupTab`. (3b.)
+- [ ] Store provider status globally as `unknown`, `loading`, `ready`, `unauthenticated`, or `error`. (3b.)
+- [ ] Make every model selector consume the same global integration registry. (3b.)
 
 ### Startup order
 
-1. Sidecar readiness.
-2. Secure configuration and local preferences.
-3. Cached provider catalogs.
-4. Managed authentication checks.
-5. Provider model discovery.
-6. MCP configuration.
-7. Workspace restoration.
-8. Skills, Git repositories/status, and metrics.
-9. Ready or degraded state.
-10. Background refresh services.
+1. Sidecar readiness. **(3a)**
+2. Secure configuration and local preferences. **(3a)**
+3. Cached provider catalogs. (3b)
+4. Managed authentication checks. (3b)
+5. Provider model discovery. (3b)
+6. MCP configuration. **(3a** — as part of step 2, not a separate step; nothing in 3a needed it broken out.**)**
+7. Workspace restoration. **(3a)**
+8. Skills, Git repositories/status, and metrics. **(3a** for status/skills/metrics via `loadWorkspaceData`; repository *discovery* stays lazy — see checklist.**)**
+9. Ready or degraded state. **(3a)**
+10. Background refresh services. (3b)
 
 ### Completion criteria
 
 Immediately after startup, every application surface sees the same settled provider, model, authentication, quota, and integration error state. Visiting or hovering over the integrations UI is not required.
+
+**Not yet met — this is 3b's completion criterion, unaffected by 3a.** 3a's own, narrower criterion: the coordinator reaches `ready`/`degraded`/`failed` exactly once per launch, blocking the splash no longer than its 8s global deadline, with a restored workspace's git/skills/metrics all loaded by the time it does. Met.
+
+### Deviations from this plan, and why (3a)
+
+- **Split into 3a/3b mid-PR**, per the section intro above — the plan as drafted did not anticipate this.
+- **`StartupPhase` (flat union) replaced with `StartupState` (discriminated union)** — see "Startup state" above.
+- **The real startup steps live in `components/shell/startupSteps.ts`, not `src/startup/`** as the implementation plan's module layout originally sketched. They need the real store and Tauri's `invoke`; `src/startup/`'s own layering test forbids exactly that import for the generic executor (mirroring `src/tabs/policy.ts` vs `views.tsx`). Lives next to `AppBootstrapBoundary.tsx`, its only consumer.
+- **The dev sidecar port mismatch was a pre-existing bug, not something this plan anticipated fixing.** `src-tauri/src/lib.rs`'s `spawn_sidecar` always bound the child process to a hardcoded 4000 with no `PORT` env passed through, while `src/config/sidecar.ts` has the dev frontend expect 4001 (deliberately, so a dev instance doesn't fight an installed release copy). `npm run tauri dev` alone had no reachable sidecar at all until this PR made the Rust-side port `cfg!(debug_assertions)`-aware.
+- **A data-loss bug in `saveSecureConfig` was found and fixed**, also not anticipated by the plan: it always wrote the entire config snapshot, unguarded by whether a load had ever completed. Fixed with `secureConfigLoaded`, landed as its own standalone commit specifically so it wouldn't be lost among the larger startup-machine changes.
+- **Workspace restore does not route through `setRootPath`.** An early design (before implementation) planned reusing `setRootPath` directly; that would have made Retry destructive (it also resets tabs/canvases/nodes). Extracted a shared `loadWorkspaceData()` tail instead (git+skills+metrics), called by both `setRootPath` and the new `workspace-restore` step.
+- **A third, previously-undocumented slice import-time purity violation** (`createPreferencesSlice.ts`) was found and fixed alongside the two ARCHITECTURE.md already recorded.
+
+### Known gaps left for later (3a)
+
+- **Repository discovery (`git_scan_subprojects`) stays lazy**, triggered only by opening Source Control — not moved to startup. Whether it should be is a 3b (or later) decision, not made here.
+- **3b's entire scope** — cached provider catalogs, concurrent managed-auth checks, bounded-concurrency model discovery, MCP server validation, background provider-status/quota refreshers, retiring `LlmSetupTab`'s own polling, a global provider-status enum, and unifying every model selector onto it. `dependsOn` support already exists in the executor for this (`runStartup.ts`), unused by any 3a step, specifically so 3b doesn't need an executor rewrite.
+- **`llmIntegrationService.request()`'s new timeouts change `useManagedProviderStatus.ts`'s observed behavior** (a hung request now surfaces `{state: "failed"}` after its timeout instead of stalling indefinitely) — not pinned by a characterization test, since that hook's own consolidation into the provider registry is 3b's job.
 
 ## PR 4 — Shared sidecar agent protocol
 

@@ -4,8 +4,10 @@ import {
   isCodexProvider,
   isCopilotProvider,
   isManagedAuthProvider,
+  selectableModelProviders,
 } from "./providerHelpers";
-import type { CustomProvider } from "./types";
+import type { CustomProvider, ProviderStatus } from "./types";
+import type { ProviderStatusKind } from "../integrations/registryTypes";
 
 /**
  * These predicates used to be duplicated verbatim in LlmSetupTab.tsx and
@@ -71,5 +73,47 @@ describe("isManagedAuthProvider", () => {
 
   it("is false for a regular provider", () => {
     expect(isManagedAuthProvider(provider({ id: "opencode" }))).toBe(false);
+  });
+});
+
+describe("selectableModelProviders: registry-aware gating (REFACTOR_PLAN.md PR 3c)", () => {
+  function statusOf(kind: ProviderStatusKind): Record<string, ProviderStatus> {
+    return { "github-copilot": { kind } };
+  }
+
+  const managed = provider({ id: "github-copilot", authType: "environment" });
+  const regularWithKey = provider({ id: "custom-ollama", authType: "bearer", apiKey: "sk-test" });
+  const regularNoKey = provider({ id: "custom-ollama", authType: "bearer", apiKey: "" });
+  const regularNoAuth = provider({ id: "custom-ollama", authType: "none" });
+
+  it("includes a managed provider only when its status is 'ready'", () => {
+    expect(selectableModelProviders([managed], statusOf("ready"), null)).toEqual([managed]);
+  });
+
+  it.each(["unknown", "loading", "unauthenticated", "error"] as const)(
+    "excludes a managed provider when its status is '%s'",
+    (kind) => {
+      expect(selectableModelProviders([managed], statusOf(kind), null)).toEqual([]);
+    },
+  );
+
+  it("includes a managed provider excluded by status if it is the currently-selected provider (escape hatch)", () => {
+    expect(selectableModelProviders([managed], statusOf("error"), "github-copilot")).toEqual([managed]);
+  });
+
+  it("includes a regular provider with authType 'none' even with no providerStatus entry at all", () => {
+    // The asymmetry this test guards: providerCoordinator.ts only ever
+    // polls the three managed provider ids, so a regular provider's
+    // registry entry is permanently absent (reads back {kind: "unknown"}
+    // via providerStatusOrUnknown) -- it must never be gated on status.
+    expect(selectableModelProviders([regularNoAuth], {}, null)).toEqual([regularNoAuth]);
+  });
+
+  it("includes a regular provider with a non-empty apiKey, no providerStatus entry", () => {
+    expect(selectableModelProviders([regularWithKey], {}, null)).toEqual([regularWithKey]);
+  });
+
+  it("excludes a regular provider with authType requiring a key but none set -- today's rule, unchanged", () => {
+    expect(selectableModelProviders([regularNoKey], {}, null)).toEqual([]);
   });
 });

@@ -10,7 +10,7 @@ import { useDiffViewMode } from "../../hooks/useDiffViewMode";
 import { DiffViewToggle } from "../ui/DiffViewToggle";
 import { Chat } from "../ui/Chat";
 import { ChatInput } from "../ui/ChatInput";
-import { selectableProviderModels } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { createMonacoDiffOptions } from "../../editor/monacoOptions";
 
 const EMPTY_ARRAY: any[] = [];
@@ -29,6 +29,11 @@ export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExec
   const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const updateTaskNode = useWorkspaceStore((state) => state.updateTaskNode);
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
   // Declared before the selectors that close over it: the previous ordering
   // read taskNodeId from its temporal dead zone, which only ever avoided
@@ -245,11 +250,10 @@ export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExec
             <CustomSelect
               value={(taskNode.data as any).model || activeModel}
               onChange={(val) => updateTaskNode(taskNodeId, { model: val })}
-              options={selectableProviderModels(customProviders, providerStatus, activeCustomProviderId).map(({ model }) => ({
-                id: model.id,
-                name: `${model.name} (${model.id})`,
-              }))}
-              placeholder="No models configured"
+              options={modelOptions}
+              placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+                ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+                : "No models configured"}
               className="w-48"
             />
           </div>

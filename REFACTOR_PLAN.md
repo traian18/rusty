@@ -433,9 +433,9 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 ### Consumer migration checklist
 
 - [x] Canvas node execution. (`nodeExecutionService.ts`; also gained real server-side cancellation via a new `execute_node_stop`, which did not exist before)
-- [ ] Agent tab.
-- [ ] Global and explorer chat.
-- [ ] Task generation.
+- [ ] Agent tab. (`agentChatService.ts` already built and used by explorer chat below; AgentTab.tsx itself not yet migrated)
+- [x] Global and explorer chat. (`agentChatService.ts` for the chat send, `globalExploreService.ts` for Summarize; global_explore also gained real cancellation via a new `global_explore_stop`, which did not exist before, and its `token` event gained a correlating `nodeId`)
+- [x] Task generation. (`taskGenerationService.ts`; also fixed the `generate_task_nodes_stopped` dual-shape bug)
 - [ ] Skill generation.
 - [ ] Edge reconciliation.
 - [ ] Graph reconciliation.

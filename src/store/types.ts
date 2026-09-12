@@ -10,6 +10,7 @@ import type { TypographyPreferences } from "../preferences/typography";
 import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences/shortcuts";
 import type { DrawerView } from "../preferences/shellLayout";
 import type { OpenTabRequest, TabInstance } from "../tabs/types";
+import type { StartupState } from "../startup/types";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -250,6 +251,12 @@ export interface LspSettings {
 }
 
 export interface WorkspaceState {
+  /** The startup coordinator's live lifecycle state (REFACTOR_PLAN.md PR
+      3a). No consumers yet as of commit 9 -- AppBootstrapBoundary is wired
+      to it in a later commit. */
+  startupState: StartupState;
+  setStartupState: (startupState: StartupState) => void;
+
   rootPath: string;
   nodes: Node[];
   edges: Edge[];

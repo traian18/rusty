@@ -14,10 +14,14 @@ Three independent npm projects, not an npm/pnpm workspace:
   `moduleResolution: "bundler"`, built with Vite.
 - **`agent-sidecar/`** — the headless Node agent runner. CommonJS,
   `moduleResolution: "node"`, its own `package.json` and lockfile.
-- **`shared/`** — a source-only package (`shared/agentProtocol.ts`) consumed
-  by both sides via relative import. `agent-sidecar/tsconfig.json` pulls it
-  in with `rootDir: ".."`, so it is compiled twice, once under each side's
-  module settings.
+- **`shared/`** — a source-only package (`shared/agent-protocol/`, split
+  from a single `agentProtocol.ts` file in PR 4a) consumed by both sides
+  via relative import. `agent-sidecar/tsconfig.json` pulls it in with
+  `rootDir: ".."`, so it is compiled twice, once under each side's module
+  settings — a real constraint that has bitten this directory once
+  already (PR 4a: a class using `ErrorOptions.cause` in its `super()` call
+  typechecked fine when it lived only in the sidecar's ES2022 config, but
+  failed once moved here because the frontend's tsconfig targets ES2020).
 
 **Invariant:** `shared/` must stay dependency-free and syntactically valid
 under both ESM/bundler and CommonJS/node resolution. This is the constraint

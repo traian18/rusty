@@ -373,6 +373,20 @@ Immediately after startup, every application surface sees the same settled provi
 
 Preserve and extend the existing versioned protocol instead of creating a competing protocol.
 
+Split into **4a** (shared discriminated types, additive only, no wire
+behavior change — **done, this section**) and **4b** (migrate all 9
+`createAgentHarnessSocket` call sites onto typed per-capability
+services, fixing the correctness bugs found along the way, then delete
+the facade — not started). 4a built the module layout below exactly as
+proposed, documented every capability's current (pre-rename) wire
+shape in `commands.ts`/`events.ts`, wired up `AgentTerminalState` via a
+naming-convention classifier usable before any capability migrates,
+unified the 3 incompatible error-code shapes into one, and added
+generic field-validation helpers for 4b to adopt per capability. It
+intentionally did not rename any wire field or touch any capability's
+runtime behavior — see the plan file's "Decisions taken" for why a
+same-commit two-sided rename is 4b's job, one capability at a time.
+
 ### Proposed module layout
 
 ```text
@@ -402,16 +416,16 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 
 ### Checklist
 
-- [ ] Retain version negotiation and capability negotiation.
-- [ ] Define a discriminated command map.
-- [ ] Define a discriminated event map.
-- [ ] Validate every payload at runtime, not just the envelope.
+- [x] Retain version negotiation and capability negotiation.
+- [x] Define a discriminated command map.
+- [x] Define a discriminated event map.
+- [ ] Validate every payload at runtime, not just the envelope. (helpers added in 4a; wiring per capability is 4b)
 - [ ] Document stable conversation, run, message, correlation, parent-agent, and sequence semantics.
-- [ ] Define terminal outcomes: completed, failed, cancelled, timed out, and disconnected.
+- [x] Define terminal outcomes: completed, failed, cancelled, timed out, and disconnected.
 - [ ] Define typed reverse RPC for file reads, file writes, permissions, questions, and logs.
 - [ ] Define cancellation and reconnection behavior.
 - [ ] Define replay, ordering, duplicate, and idempotency behavior.
-- [ ] Define stable structured error codes.
+- [x] Define stable structured error codes.
 - [ ] Implement the transport-neutral client interface.
 - [ ] Keep integration HTTP calls behind a separate replaceable control-plane interface.
 - [ ] Keep LSP on its own protocol and transport boundary.

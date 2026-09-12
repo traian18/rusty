@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { AGENT_PROTOCOL_VERSION, AgentEnvelope, validateEnvelope } from "../../../shared/agentProtocol";
+import { AGENT_PROTOCOL_VERSION, AgentEnvelope, AgentTerminalState, validateEnvelope } from "../../../shared/agent-protocol";
 
 export interface EventQueryOptions {
   agentId?: string;
@@ -152,9 +152,22 @@ export class FileEventPersistence implements EventPersistence {
   }
 }
 
+/**
+ * The 3 terminal outcomes below are the same values AgentTerminalState
+ * names (Extract keeps this declaration tied to that shared vocabulary
+ * instead of silently drifting from it), plus this recorder's own two
+ * non-terminal-state concepts AgentTerminalState doesn't cover: a run
+ * still in progress, and one whose process restarted mid-run. Not
+ * renamed to AgentTerminalState's own "disconnected"/"timed_out" here --
+ * that would change this API's real values (an existing test asserts
+ * "interrupted" literally) with no capability behavior actually asking
+ * for that rename yet.
+ */
+export type ReplayedRunStatus = Extract<AgentTerminalState, "completed" | "failed" | "cancelled"> | "running" | "interrupted";
+
 export interface ReplayedRunState {
   runId: string;
-  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  status: ReplayedRunStatus;
   lastSequence: number;
   messages: AgentEnvelope[];
   questions: AgentEnvelope[];

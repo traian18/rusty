@@ -45,7 +45,7 @@ export interface AgentChatCallbacks {
   onReadFile: (path: string) => Promise<string>;
   onWriteFile: (path: string, content: string) => Promise<void>;
   onWritePlan?: (filename: string, content: string) => Promise<string>;
-  onComplete: (response: string) => void;
+  onComplete: (result: { response: string; modifiedFiles: string[]; subagents: unknown[] }) => void;
   onError: (message: string) => void;
 }
 
@@ -146,7 +146,11 @@ export const agentChatService = {
       }
       if (event.type === "agent_chat_complete") {
         finish();
-        callbacks.onComplete(String(event.response || "Exploration complete."));
+        callbacks.onComplete({
+          response: String(event.response || "Agent chat complete."),
+          modifiedFiles: Array.isArray(event.modifiedFiles) ? event.modifiedFiles as string[] : [],
+          subagents: Array.isArray(event.subagents) ? event.subagents : [],
+        });
         return;
       }
       if (event.type === "agent_chat_error") {

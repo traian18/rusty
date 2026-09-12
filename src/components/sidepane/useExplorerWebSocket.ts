@@ -480,7 +480,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
           addLog(selectedNodeId, `Saved plan to ${planPath}`);
           return planPath;
         },
-        onComplete: (responseText) => {
+        onComplete: ({ response: responseText }) => {
           console.log(`[SidePane] Exploration complete! Response length: ${responseText.length}`);
           const assistantMsg = {
             id: `msg_${Date.now()}`,

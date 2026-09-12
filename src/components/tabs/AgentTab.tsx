@@ -10,7 +10,8 @@ import { notify } from "../../notificationStore";
 import { commandPermissionService, handleCommandPermissionMessage } from "../../services/commandPermissionService";
 import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
+import { selectableProviderModels } from "../../store/providerHelpers";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../../config/sidecar";
 import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
@@ -373,9 +374,27 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
       const wsRootPath = useWorkspaceStore.getState().rootPath;
       const currentProviders = useWorkspaceStore.getState().customProviders;
       const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
-      const prov = currentProviders.find((provider) =>
-        providerHasModelReference(provider, selectedModel)
-      ) || currentProviders.find((provider) => provider.id === currentActiveProviderId);
+      const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
+      const resolution = resolveExecutionProvider(
+        currentProviders,
+        currentProviderStatus,
+        currentActiveProviderId,
+        selectedModel,
+      );
+      if (!resolution.ok) {
+        addAgentMessage(tab.id, {
+          id: `msg_${Date.now()}`,
+          role: "assistant" as const,
+          content: resolution.message,
+          timestamp: new Date().toISOString(),
+        });
+        isStreamingRef.current = false;
+        setIsStreaming(false);
+        notify("Cannot send message", resolution.message, "error");
+        socket.close();
+        return;
+      }
+      const prov = resolution.provider;
       const chatHistory = useWorkspaceStore.getState().agentChats[tab.id] || [];
       const currentSkills = useWorkspaceStore.getState().skills;
       const resolved = resolveSkill(currentSkills, selectedSkillId);
@@ -397,7 +416,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
         chatHistory: chatHistory
           .filter((m: any) => m.role === "user" || m.role === "assistant")
           .map((m: any) => ({ role: m.role, content: m.content })),
-        customProvider: prov || null,
+        customProvider: prov,
         skill: skillData,
         mcpServers,
         lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },

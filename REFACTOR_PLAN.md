@@ -243,14 +243,18 @@ The workspace occupies the main window, no split affordance remains, and explore
 
 ## PR 3 — Extensible application startup procedure
 
-Split mid-PR into **3a** (the startup coordinator itself: the executor,
-sidecar health, secure config, workspace restore, timeouts, degraded/retry
-— everything below that's ticked) and **3b** (the provider/integration
-registry: cached catalogs, managed auth, model discovery, MCP validation,
-background refreshers, and consolidating `LlmSetupTab`'s polling and every
-model selector onto one source). 3b is meaningless until 3a's coordinator
-exists to hang its steps on; it is not yet planned or started. This PR's
-top-level checklist stays incomplete until 3b lands too.
+Split mid-PR into **3a** (the startup coordinator itself — done), **3b**
+(the provider/integration registry: producer side — done, this section),
+and **3c** (consumer side: every model selector, the execution-time
+`getState()` resolvers, and MCP validation onto the same registry — not
+started). 3b split again into 3b/3c mid-implementation, for the same
+reason 3 split into 3a/3b: the measured surface (~1,200 lines of LLM-setup
+UI, ~800 of quota UI, 13 further consumer files across 11 model pickers)
+was too much for one PR, and there is a clean producer/consumer seam —
+3b builds the registry and rewires the two surfaces that owned the
+duplicated state (`LlmSetupTab`, `ProviderQuotaControl`); 3c moves every
+remaining consumer onto it. This PR's top-level checklist stays incomplete
+until 3c lands too.
 
 ### Startup state
 
@@ -285,41 +289,38 @@ type StartupState =
 - [x] Create a bootstrap coordinator independent of `App.tsx`. (3a — `runStartup` + `AppBootstrapBoundary`.)
 - [x] Start and health-check the sidecar. (3a — `startupSteps.ts`'s bounded `pollSidecarHealth`; also fixed a real dev-port mismatch that made the bundled sidecar unreachable in `npm run tauri dev` — see deviations.)
 - [x] Load secure configuration and preferences. (3a.)
-- [ ] Load cached provider catalogs immediately. (3b.)
-- [ ] Check Codex, Claude Code, and Copilot authentication concurrently. (3b.)
-- [ ] Discover or refresh models for every configured provider with bounded concurrency. (3b.)
+- [x] Load cached provider catalogs immediately. (3b — they already load with the encrypted config at startup; the real gap this closes is that nothing ever refreshed them without a tab visit, which the background sweep below does.)
+- [x] Check Codex, Claude Code, and Copilot authentication concurrently. (3b — `providerCoordinator.ts`'s status checks, bounded at concurrency 2.)
+- [x] Discover or refresh models for every configured provider with bounded concurrency. (3b — TTL 24h, concurrency 2, gated on a managed provider actually being `ready`; see deviations for why this is a background sweep rather than a startup step.)
 - [x] Load MCP configuration. (3a — restored as part of `loadSecureConfig`, unchanged from before this PR.)
-- [ ] Validate configured MCP servers where startup validation is appropriate. (3b — no sidecar route for this exists yet either.)
+- [~] Validate configured MCP servers where startup validation is appropriate. (Deliberately narrowed, not deferred: real validation (a sidecar route doing a genuine `initialize` + `tools/list`) is 3c's job, wired to the existing Test Connection button — **on demand only**. Startup does not validate every configured server; spawning a process per server on every launch was judged not "appropriate" here. Recorded as a decision, not a gap.)
 - [x] Restore the last workspace. (3a — `workspace-restore` step; non-destructive, unlike `setRootPath`.)
 - [x] Load skills for the restored workspace. (3a — via `loadWorkspaceData`, shared with `setRootPath`.)
-- [~] Discover repositories and load Git status. (3a loads git **status** for the restored workspace via `loadWorkspaceData`. Repository **discovery** — `git_scan_subprojects` — stays lazy, triggered only by opening the Source Control drawer, same as before this PR; moving it to startup was never in 3a's scope and isn't decided for 3b either.)
+- [~] Discover repositories and load Git status. (3a loads git **status** for the restored workspace via `loadWorkspaceData`. Repository **discovery** — `git_scan_subprojects` — stays lazy, triggered only by opening the Source Control drawer, same as before this PR; moving it to startup was never in scope for 3a, 3b, or 3c.)
 - [x] Load usage metrics. (3a — via `loadWorkspaceData`; this is the fix for the "restored workspace never loads metrics" bug this PR's context section opens with.)
-- [~] Mark startup ready only after all integration checks have settled. (The *principle* — settled means resolved, timed out, or skipped, never "succeeded"; startup blocks until every registered step reaches one of those — is implemented in 3a and applies automatically to whatever steps 3b adds. No integration checks exist to settle yet.)
-- [x] Add per-operation timeouts and cancellation. (3a — every `startupSteps.ts` step has a budget; `runStartup`'s global deadline truncates them; `llmIntegrationService.request()` also gained per-endpoint timeouts, ahead of 3b's provider steps that will need them.)
+- [~] Mark startup ready only after all integration checks have settled. (**Revised, not implemented as drafted.** Provider auth/model checks run 20-30s worst case (Copilot's status check has no server-side timeout at all; Codex's model list is paginated at 30s/page) against an 8s global startup deadline — blocking on them would mean either a ~35s splash or landing in `degraded` on most launches. Startup instead blocks only on 3a's local steps (~1s) and paints; provider work starts immediately after and settles in the background into one registry every surface reads. `unknown`/`loading` existing as status kinds only makes sense under this model — a blocking design would never let a surface observe either state.)
+- [x] Add per-operation timeouts and cancellation. (3a — every `startupSteps.ts` step has a budget; `runStartup`'s global deadline truncates them; `llmIntegrationService.request()` also gained per-endpoint timeouts, used directly by 3b's status/discovery/quota calls.)
 - [x] Add Retry and Continue in degraded mode actions. (3a — Retry re-runs only the non-"ok" sub-DAG; "Continue without waiting" (pending) and "Continue anyway" (failed) both exist.)
-- [ ] Start background provider-status and quota refreshers. (3b.)
-- [ ] Remove integration status polling from the lifecycle of `LlmSetupTab`. (3b.)
-- [ ] Store provider status globally as `unknown`, `loading`, `ready`, `unauthenticated`, or `error`. (3b.)
-- [ ] Make every model selector consume the same global integration registry. (3b.)
+- [x] Start background provider-status and quota refreshers. (3b — `providerCoordinator.ts`: status polling (1s while any login is `connecting`, capped at 5 min; 10s while LLM Setup is open; 5 min otherwise), a 24h-TTL model-discovery sweep, and a single-provider quota watch matching `ProviderQuotaControl`'s existing one-at-a-time behavior.)
+- [x] Remove integration status polling from the lifecycle of `LlmSetupTab`. (3b — `useManagedProviderStatus.ts` deleted outright; the tab now reads whatever the coordinator has already settled, whether or not it's ever been opened.)
+- [x] Store provider status globally as `unknown`, `loading`, `ready`, `unauthenticated`, or `error`. (3b — `createProviderRegistrySlice.ts`'s `providerStatus: Record<id, ProviderStatus>`; `unauthenticated` is a first-class kind distinct from `error`, fixing the bug where an unauthenticated managed provider's models just vanished from every dropdown with no explanation.)
+- [ ] Make every model selector consume the same global integration registry. (3c — the 11 pickers and 6 duplicated "is my model still valid" fallbacks across ~13 files are unmoved; only `LlmSetupTab`'s own picker and `ProviderQuotaControl` were rewired in 3b.)
 
 ### Startup order
 
 1. Sidecar readiness. **(3a)**
 2. Secure configuration and local preferences. **(3a)**
-3. Cached provider catalogs. (3b)
-4. Managed authentication checks. (3b)
-5. Provider model discovery. (3b)
-6. MCP configuration. **(3a** — as part of step 2, not a separate step; nothing in 3a needed it broken out.**)**
-7. Workspace restoration. **(3a)**
-8. Skills, Git repositories/status, and metrics. **(3a** for status/skills/metrics via `loadWorkspaceData`; repository *discovery* stays lazy — see checklist.**)**
-9. Ready or degraded state. **(3a)**
-10. Background refresh services. (3b)
+3. MCP configuration. **(3a** — as part of step 2, not a separate step; nothing in 3a needed it broken out.**)**
+4. Workspace restoration. **(3a)**
+5. Skills, Git repositories/status, and metrics. **(3a** for status/skills/metrics via `loadWorkspaceData`; repository *discovery* stays lazy — see checklist.**)**
+6. Ready or degraded state. **(3a)**
+7. Cached provider catalogs, managed authentication checks, provider model discovery, and background refreshers. **(3b — NOT part of the blocking sequence above; started from step 6's `.then()`, after the run has already settled, and never inside `runStartup`'s deadline.** The order as originally drafted here put these inline as steps 3-5, ahead of workspace restoration — abandoned along with the blocking decision itself; see deviations.**)**
 
 ### Completion criteria
 
 Immediately after startup, every application surface sees the same settled provider, model, authentication, quota, and integration error state. Visiting or hovering over the integrations UI is not required.
 
-**Not yet met — this is 3b's completion criterion, unaffected by 3a.** 3a's own, narrower criterion: the coordinator reaches `ready`/`degraded`/`failed` exactly once per launch, blocking the splash no longer than its 8s global deadline, with a restored workspace's git/skills/metrics all loaded by the time it does. Met.
+**Not yet met — this is 3c's completion criterion, unaffected by 3a/3b.** 3a's own, narrower criterion (the coordinator reaches `ready`/`degraded`/`failed` exactly once per launch, blocking the splash no longer than its 8s global deadline, with a restored workspace's git/skills/metrics all loaded by the time it does) is met. 3b's own criterion — the registry itself exists, settles correctly on its own schedule, and the two surfaces that used to own duplicated private state (`LlmSetupTab`, `ProviderQuotaControl`) now read it instead — is also met, verified live: opening LLM Setup or the quota widget having never visited either shows already-settled state, sourced from the same `providerStatus` map. The full criterion needs 3c: the other 13 consumer files (11 model pickers, the execution-time `getState()` resolvers) still read `customProviders`/`activeModel` directly rather than the registry.
 
 ### Deviations from this plan, and why (3a)
 
@@ -333,9 +334,25 @@ Immediately after startup, every application surface sees the same settled provi
 
 ### Known gaps left for later (3a)
 
-- **Repository discovery (`git_scan_subprojects`) stays lazy**, triggered only by opening Source Control — not moved to startup. Whether it should be is a 3b (or later) decision, not made here.
-- **3b's entire scope** — cached provider catalogs, concurrent managed-auth checks, bounded-concurrency model discovery, MCP server validation, background provider-status/quota refreshers, retiring `LlmSetupTab`'s own polling, a global provider-status enum, and unifying every model selector onto it. `dependsOn` support already exists in the executor for this (`runStartup.ts`), unused by any 3a step, specifically so 3b doesn't need an executor rewrite.
-- **`llmIntegrationService.request()`'s new timeouts change `useManagedProviderStatus.ts`'s observed behavior** (a hung request now surfaces `{state: "failed"}` after its timeout instead of stalling indefinitely) — not pinned by a characterization test, since that hook's own consolidation into the provider registry is 3b's job.
+- **Repository discovery (`git_scan_subprojects`) stays lazy**, triggered only by opening Source Control — not moved to startup. Whether it should be is a later decision, not made here.
+- **3b's entire scope** — cached provider catalogs, concurrent managed-auth checks, bounded-concurrency model discovery, MCP server validation, background provider-status/quota refreshers, retiring `LlmSetupTab`'s own polling, a global provider-status enum, and unifying every model selector onto it. `dependsOn` support already exists in the executor for this (`runStartup.ts`), unused by any 3a step, specifically so 3b doesn't need an executor rewrite — and 3b did not, in the end, need it either (see 3b's own deviations: provider work is not a startup step at all).
+- **`llmIntegrationService.request()`'s new timeouts changed `useManagedProviderStatus.ts`'s observed behavior** (a hung request now surfaces `{state: "failed"}` after its timeout instead of stalling indefinitely) — not pinned by a characterization test at the time, since that hook's own consolidation into the provider registry was 3b's job. Moot now: the hook is deleted (3b commit 9); the timeout behavior lives on in `providerCoordinator.ts`'s status checks instead, covered by `providerCoordinator.test.ts`.
+
+### Deviations from this plan, and why (3b)
+
+- **Provider work is not a startup step.** The plan as drafted (see "Startup order" above) had cached catalogs, auth checks, and model discovery as steps 3-5 inside the blocking sequence. Verifying the actual costs first (Copilot's status check has no server-side timeout of its own and pays a full SDK cold start; Codex's model list is paginated at 30s/page with no cap; Claude Code's quota path deliberately bypasses its own status cache on every call) showed that blocking on them would mean either raising the 8s global deadline past 30s or landing in `degraded` on nearly every launch. `providerCoordinator.ts` runs entirely outside `runStartup`, started from `AppBootstrapBoundary`'s existing module-level run promise once the blocking run settles.
+- **3b split again, into 3b and 3c**, for the same reason 3 split into 3a/3b — see this section's intro. Not anticipated when 3a's plan was written.
+- **The fast-poll cadence (1s while a managed login is `connecting`) is capped at 5 minutes**, not unbounded. Today's `useManagedProviderStatus.ts` got this bound for free from the LLM Setup tab unmounting (`keepAlive: "active-only"`); moving polling out of React removes that accidental bound, so the cap had to be added explicitly (`schedule.ts`'s `isFastPollExpired`) or a sidecar wedged in `connecting` would 1s-poll for the entire session.
+- **Quota fetching stays scoped to one provider at a time** (`setQuotaWatch`), matching `ProviderQuotaControl`'s existing behavior exactly, rather than proactively fetching every eligible provider's quota on a timer. Claude Code's quota path re-probes fully on every single call with no warm-state amortization; fetching it for every eligible provider every 5 minutes forever would have been a real, avoidable new cost the plan's own wording ("start background... quota refreshers") could be read to imply but the actual numbers argue against.
+- **`saveSecureConfig`'s nine `setTimeout(..., 0)` call sites were coalesced into one debounced scheduler** before anything else in 3b landed (commit 3, ahead of `modelsFetchedAt` in commit 6) — not something the original plan anticipated, but background discovery stamping `modelsFetchedAt` on every eligible provider at launch would otherwise have triggered a full PBKDF2-100k-iteration rewrite storm.
+- **Lifted actions take a provider object, not an id.** `LlmSetupTab.tsx`'s `providerWithDraftSettings()` merges unsaved form edits over the store's provider before Fetch/Test; a registry action taking only an id would have silently operated on stale saved credentials instead of what's on screen. The draft merge stays in the component; `discoverModelsForProvider`/`startManagedLogin`/`logoutManaged` all take a `CustomProvider`.
+- **`toLegacyManagedStatus()` in `LlmSetupTab.tsx` was a deliberate one-commit stopgap** (commit 9), adapting a registry `ProviderStatus` entry back into `ProviderList`'s old `{state, authenticated, login, email}` prop shape so the riskiest commit (deleting the only working device-code login flow's polling hook) didn't also have to touch `ProviderList` in the same commit. Deleted the very next commit (10), once `ProviderList` read `providerStatus` directly.
+
+### Known gaps left for later (3b/3c)
+
+- **3c's entire scope** — one `useSelectableModels()` hook replacing the 11 duplicated model pickers and their 5 label formats across ~8 files; killing the 6 duplicated "is my selected model still valid" fallbacks, the worst of which (`AgentTab.tsx`) rewrites the global `activeModel` as a mount side effect; routing the execution-time `getState()` resolvers (`Workspace.tsx`, `useExplorerWebSocket.ts`, `useEdgeWebSocket.ts`, `SkillsTab.tsx`) through `providerHasModelReference` instead of ad hoc string-splitting or unfiltered provider lists; and the real MCP validation route wired to the existing (currently fake) Test Connection button.
+- **The requestSeq/latestRequestSeq stale-response guard in `providerCoordinator.ts` has no test exercising true concurrent supersession** — the coordinator's own poll loop can't produce that race by itself (a provider's next poll never starts until its previous one has settled), so the guard is currently proven only by direct construction, not by a live race. It gets a real test once 3c (or later) adds a manual "refresh this provider now" entry point that can actually race a poll.
+- **The module-global `fetchCounter` deleted from `ProviderQuotaControl/index.tsx`** had undocumented cross-instance staleness semantics; its replacement (`providerCoordinator.ts`'s own per-provider sequence guard) was verified to behave equivalently for the single-watched-provider case but the two were never tested side by side.
 
 ## PR 4 — Shared sidecar agent protocol
 

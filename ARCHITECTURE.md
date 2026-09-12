@@ -248,10 +248,12 @@ actually failed or timed out; a critical step merely *skipped* by an early
 abort degrades instead, matching "Continue anyway."
 
 **`dependsOn` is what makes an unreachable sidecar cheap.** A step whose
-dependency didn't settle `"ok"` is skipped without running, transitively —
-one health-check budget instead of N sequential provider timeouts once PR
-3b adds those steps. In PR 3a's own three-step registry, only
-`workspace-restore` uses it (`dependsOn: ["secure-config"]`).
+dependency didn't settle `"ok"` is skipped without running, transitively.
+In PR 3a's own three-step registry, only `workspace-restore` uses it
+(`dependsOn: ["secure-config"]`) — it turned out PR 3b did not need this
+for provider steps after all, since provider checks are not startup steps
+at all (see "The integration registry" below); the mechanism remains as
+forward-looking infrastructure for whichever future step needs it.
 
 **StrictMode:** a module-level in-flight promise
 (`AppBootstrapBoundary.tsx`'s `activeRun`), not a `runIdRef`. A `runIdRef`
@@ -293,6 +295,126 @@ passed through. `npm run tauri dev` alone, without also following
 `BUILD.md`'s separate manual-sidecar instructions, had no reachable
 sidecar at all. Fixed by making the Rust-side constant `cfg!
 (debug_assertions)`-aware and passing it through as the child's `PORT` env.
+
+## The integration registry
+
+PR 3b's producer half (3c, not yet started, is the consumer half): one
+global map of provider auth/model/quota status, so every application
+surface can eventually see the same settled state without visiting LLM
+Setup. Before this, that state lived entirely inside components that
+unmount: three `useManagedProviderStatus` polls and a `connectionStatus`
+map inside `LlmSetupTab` (destroyed by its `keepAlive: "active-only"` tab
+policy on every tab switch), and a separate quota cache inside
+`ProviderQuotaControl`.
+
+```
+src/integrations/                     (no store/service/React import -- see below)
+├── registryTypes.ts    ProviderStatusKind, ProviderStatusEntry<TQuota>, providerStatusOrUnknown
+├── schedule.ts          pure polling cadence: (status, now) -> next delay ms
+├── discoveryPolicy.ts   pure eligibility/staleness rules for model discovery and quota
+├── concurrency.ts        a minimal counting semaphore
+└── layering.test.ts      enforces the rule above
+
+src/store/slices/createProviderRegistrySlice.ts   providerStatus: Record<id, ProviderStatus>
+components/shell/providerCoordinator.ts            owns the timers and sidecar calls
+```
+
+**Why the split, again.** Same argument as the startup coordinator's own
+`src/startup/` vs `components/shell/startupSteps.ts` split: `schedule.ts`,
+`discoveryPolicy.ts`, and `concurrency.ts` are pure functions of a status
+map and a clock, so they're directly testable under plain `environment:
+"node"`. `providerCoordinator.ts` is where the actual `setTimeout` calls
+and `llmIntegrationService` requests happen — it cannot live under
+`src/integrations/` (its own `layering.test.ts` forbids exactly that
+import), so it sits next to `startupSteps.ts` instead, verified partly by
+mocked unit tests and partly by hand in a live browser.
+
+**`ProviderStatusEntry`'s `kind` is a five-value discriminant**
+(`unknown | loading | ready | unauthenticated | error`), and
+`unauthenticated` being distinct from `error` is the entire point: before
+this, `selectableProviderModels` (`store/providerHelpers.ts`) filtered an
+unauthenticated managed provider out of the array entirely, so its models
+just vanished from every dropdown with no explanation, and (via
+`AgentTab.tsx`'s mount effect, still true today — that's 3c's job) the
+global model selection could be silently rewritten to something else
+entirely. `unknown`/`loading` existing as separate kinds only makes sense
+under a background-settling model — a design that blocked startup on
+these checks would never let a surface observe either one.
+
+**Provider work is not a startup step, on purpose.** `runStartup`'s global
+deadline is 8s; Copilot's status check alone has no server-side timeout
+of its own and pays a full SDK cold start, and Codex's model list is
+paginated at 30s/page with no cap. Verifying those actual costs (not just
+assuming) is what killed the plan's original draft, which had cached
+catalogs/auth checks/model discovery as startup steps 3-5. Instead,
+`startProviderCoordinator()` is called once, idempotently, from
+`AppBootstrapBoundary`'s existing module-level run promise — in the
+`.then()` right after the blocking run settles, regardless of whether it
+ended `ready`, `degraded`, or `failed`.
+
+**The polling cadence has three tiers, not the naive two.** Today's
+`useManagedProviderStatus` had 1s while `state === "connecting"`, 10s
+otherwise — bounded only by the LLM Setup tab unmounting. Running outside
+React removes that accidental bound, so `schedule.ts` adds an explicit
+cap (`FAST_POLL_MAX_DURATION_MS`, 5 minutes) on the fast tier, and splits
+"otherwise" into two: 10s while LLM Setup happens to be open (preserving
+felt responsiveness where a human is actually watching), 5 minutes
+otherwise (matching `ProviderQuotaControl`'s pre-existing refresh
+interval) — never a blanket "poll all three providers every 10 seconds
+forever," which would mean three sidecar requests capable of cold-
+starting an SDK client or spawning a child process every 10 seconds for
+the life of the session.
+
+**The stale-response guard is a monotonic sequence number, not a
+timestamp comparison.** Every status check, login, logout, and quota
+fetch bumps a per-provider counter before issuing its request; a response
+is only applied if that counter hasn't advanced since — so a slow poll
+that resolves after a fresh login (or a manual refresh) has already
+superseded it is dropped rather than clobbering newer state. No clock-
+resolution edge cases, and it behaves identically whether the superseded
+request failed, timed out, or simply arrived late.
+
+**Login and logout write through the same path a poll would.**
+`startManagedLogin`/`logoutManaged` don't maintain their own status
+shape — they call the sidecar, then `forcePollNow()` (cancel this
+provider's pending timer, re-run `checkProviderStatus` immediately). A
+login is just another reason a status can change, not a separate write
+path with its own guarantees to keep in sync.
+
+**Quota stays scoped to one watched provider, not every eligible one.**
+`ProviderQuotaControl` only ever shows a single provider's quota;
+`setQuotaWatch` mirrors that exactly rather than proactively fetching
+every eligible provider's quota on a timer. Claude Code's quota path
+deliberately bypasses its own status cache on every single call — there
+is no warm-state amortization that would make fetching it for every
+eligible provider every 5 minutes forever anything but a pure added cost.
+
+**Model discovery is background, TTL'd, and never touches `activeModel`.**
+`CustomProvider.modelsFetchedAt` (optional) records when a catalog was
+last actually discovered; absent or older than 24h is stale. A managed
+provider is only eligible once its registry status is `ready` — fixing
+the same bug `selectableProviderModels`-style filters have: `authType
+"environment"` used to mean "always configured" regardless of whether
+the provider was actually signed in. Background discovery always writes
+only `models`/`modelsFetchedAt`, deliberately never `activeModel` — unlike
+`LlmSetupTab`'s own user-initiated Fetch, a background refresh silently
+changing what's selected would surprise nobody who asked for it.
+
+**Lifted actions take a provider object, not an id.**
+`LlmSetupTab.tsx`'s `providerWithDraftSettings()` merges unsaved form
+edits over the store's saved provider before Fetch/Test run — a lifted
+action taking only an id would silently test or discover against stale
+saved credentials while the user is still editing them. The draft merge
+stays in the component; `discoverModelsForProvider`,
+`startManagedLogin`, and `logoutManaged` all take a `CustomProvider`.
+
+**`saveSecureConfig`'s nine call sites are coalesced into one debounced
+scheduler**, keyed by the store's `get` via a `WeakMap` (so multiple test
+stores never share a pending timer) rather than a bare module-level
+timer. `saveSecureConfig` writes the *entire* encrypted blob through
+PBKDF2 at 100,000 iterations; without coalescing, background discovery
+stamping `modelsFetchedAt` on every eligible provider at launch would
+have triggered a full rewrite per provider, every launch.
 
 ## Migration rules (for PRs 1-7)
 

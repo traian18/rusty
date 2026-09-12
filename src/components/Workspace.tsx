@@ -12,9 +12,8 @@ import { createPortal } from "react-dom";
 import { AlertTriangle, X, Save, HelpCircle } from "lucide-react";
 import { canvasFileService } from "./tabs/canvas/services/canvasFileService";
 import { CommandPermissionPresenter } from "./permissions/CommandPermissionPresenter";
-import { commandPermissionService, handleCommandPermissionMessage } from "../services/commandPermissionService";
 import { scheduleTreeRefresh } from "./filetree/FileTreePresenter";
-import { createAgentHarnessSocket } from "../services/agentHarnessClient";
+import { nodeExecutionService, NodeExecutionRun } from "../services/nodeExecutionService";
 import { SIDECAR_PORT } from "../config/sidecar";
 import { appendBoundedText } from "../services/boundedTextBuffer";
 import { invoke } from "@tauri-apps/api/core";
@@ -33,7 +32,7 @@ export const Workspace: React.FC = () => {
 
   const globalContextSummary = useWorkspaceStore((state) => state.globalContextSummary);
 
-  const socketsRef = useRef<Map<string, WebSocket>>(new Map());
+  const socketsRef = useRef<Map<string, NodeExecutionRun>>(new Map());
 
   useEffect(() => {
     const handler = (e: CustomEvent) => {
@@ -330,162 +329,101 @@ export const Workspace: React.FC = () => {
       }, 150);
     };
 
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      socketsRef.current.set(nodeId, socket);
-    } catch (err: any) {
-      console.error("Failed to construct WebSocket:", err);
-      addLog(nodeId, `Fatal: Failed to construct WebSocket: ${err.message}`);
-      setNodeStatus(nodeId, "error");
-      notify(
-        "Sidecar Connection Error",
-        `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-      return;
-    }
-
-    socket.onopen = () => {
-      console.log("WebSocket connection opened to sidecar");
-      addLog(nodeId, "Connection established. Dispatching task execution details...");
-      setExecutingNode(nodeId).catch(err => {
-        console.error(`[Workspace] Failed to set current executing node:`, err);
-      });
-
-      socket.send(
-        JSON.stringify({
-          type: "execute_node",
-          nodeId,
-          instructions: currentInstructions,
-          model: nodeModel,
-          workspaceRoot: rootPath,
-          inputFiles,
-            globalContext: globalContextSummary || "",
-            contextDescriptions,
-            mcpContext,
-            upstreamTaskContext,
-            chatHistory: chatHistoryToSend,
-          customProvider: provider,
-          skill: skillData,
-          lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },
-        })
-      );
+    const finishRun = () => {
+      socketsRef.current.delete(nodeId);
+      if (socketsRef.current.size === 0) {
+        setExecutingNode(null).catch(err => {
+          console.error(`[Workspace] Failed to clear current executing node:`, err);
+        });
+      }
     };
 
-    socket.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-
-        if (handleCommandPermissionMessage(data, socket)) return;
-        if (data.type === "command_output" && data.sessionId === nodeId) {
-          consoleBuffer = appendBoundedText(consoleBuffer, data.content);
+    let connectedToSidecar = false;
+    const run = nodeExecutionService.execute(
+      {
+        nodeId,
+        instructions: currentInstructions,
+        model: nodeModel,
+        workspaceRoot: rootPath,
+        inputFiles,
+        globalContext: globalContextSummary || "",
+        contextDescriptions,
+        mcpContext,
+        upstreamTaskContext,
+        chatHistory: chatHistoryToSend,
+        customProvider: provider,
+        skill: skillData,
+        lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },
+      },
+      {
+        onConnected: () => {
+          connectedToSidecar = true;
+          addLog(nodeId, "Connection established. Dispatching task execution details...");
+          setExecutingNode(nodeId).catch(err => {
+            console.error(`[Workspace] Failed to set current executing node:`, err);
+          });
+        },
+        onCommandOutput: (content) => {
+          consoleBuffer = appendBoundedText(consoleBuffer, content);
           flushConsole();
-          return;
-        }
-        if (data.type === "command_complete" && data.sessionId === nodeId) {
+        },
+        onCommandComplete: () => {
           scheduleTreeRefresh();
-          return;
-        }
-
-        if (data.type === "node_status_change") {
-          setNodeStatus(data.targetNodeId, data.status);
-          if (data.status === "error" && data.message) {
-            addLog(nodeId, `MCP error [${data.nodeName || "Node"}]: ${data.message}`);
+        },
+        onNodeStatusChange: (targetNodeId, status, message, nodeName) => {
+          setNodeStatus(targetNodeId, status as any);
+          if (status === "error" && message) {
+            addLog(nodeId, `MCP error [${nodeName || "Node"}]: ${message}`);
           }
-          return;
-        }
-
-        if (data.type === "log" && data.nodeId === nodeId) {
-          addLog(nodeId, data.message);
-          consoleBuffer = appendBoundedText(consoleBuffer, `${data.message}\n`);
+        },
+        onLog: (message) => {
+          addLog(nodeId, message);
+          consoleBuffer = appendBoundedText(consoleBuffer, `${message}\n`);
           flushConsole();
-          return;
-        }
-
-        if (data.type === "token" && data.nodeId === nodeId) {
-          consoleBuffer = appendBoundedText(consoleBuffer, data.content);
+        },
+        onToken: (content) => {
+          consoleBuffer = appendBoundedText(consoleBuffer, content);
           flushConsole();
-          return;
-        }
-
-        if (data.type === "subagent_update" && (data.nodeId === nodeId || data.tabId === nodeId) && data.subagent) {
-          window.dispatchEvent(new CustomEvent("rusty-subagent-update", { detail: { nodeId, subagent: data.subagent } }));
-          return;
-        }
-
-        if (data.type === "usage_update" && data.nodeId === nodeId) {
-          window.dispatchEvent(new CustomEvent("rusty-node-usage", { detail: { nodeId, usage: data.usage } }));
-          return;
-        }
-
-        if (data.type === "read_file") {
-          try {
-            console.log(`WebSocket [read_file] intercept for: ${data.path}`);
-            const content: string = currentExecutionVfsFiles.has(data.path)
-              ? currentExecutionVfsFiles.get(data.path)!
-              : connectedUpstreamVfsFiles.has(data.path)
-                ? connectedUpstreamVfsFiles.get(data.path)!
-                : await invoke<string>("read_file_disk", { path: data.path });
-            socket.send(
-              JSON.stringify({ type: "read_file_response", requestId: data.requestId, content })
-            );
-          } catch (err: any) {
-            console.error("WebSocket [read_file] intercept error:", err);
-            socket.send(
-              JSON.stringify({
-                type: "read_file_response",
-                requestId: data.requestId,
-                error: err.message,
-              })
-            );
-          }
-          return;
-        }
-
-        if (data.type === "write_file") {
-          try {
-            console.log(`WebSocket [write_file] intercept for: ${data.path}`);
-            if (!currentExecutionOriginalFiles.has(data.path)) {
-              // Use the upstream task's VFS state as the baseline so the diff
-              // shows only what THIS task changed, not inherited upstream changes.
-              if (connectedUpstreamVfsFiles.has(data.path)) {
-                currentExecutionOriginalFiles.set(data.path, connectedUpstreamVfsFiles.get(data.path)!);
-              } else {
-                try {
-                  const original = await invoke<string>("read_file_disk", { path: data.path });
-                  currentExecutionOriginalFiles.set(data.path, original);
-                } catch {
-                  currentExecutionOriginalFiles.set(data.path, "");
-                }
+        },
+        onSubagentUpdate: (subagent) => {
+          if (!subagent) return;
+          window.dispatchEvent(new CustomEvent("rusty-subagent-update", { detail: { nodeId, subagent } }));
+        },
+        onUsage: (usage) => {
+          window.dispatchEvent(new CustomEvent("rusty-node-usage", { detail: { nodeId, usage } }));
+        },
+        onReadFile: async (path) => {
+          console.log(`[nodeExecutionService] read_file intercept for: ${path}`);
+          if (currentExecutionVfsFiles.has(path)) return currentExecutionVfsFiles.get(path)!;
+          if (connectedUpstreamVfsFiles.has(path)) return connectedUpstreamVfsFiles.get(path)!;
+          return invoke<string>("read_file_disk", { path });
+        },
+        onWriteFile: async (path, content) => {
+          console.log(`[nodeExecutionService] write_file intercept for: ${path}`);
+          if (!currentExecutionOriginalFiles.has(path)) {
+            // Use the upstream task's VFS state as the baseline so the diff
+            // shows only what THIS task changed, not inherited upstream changes.
+            if (connectedUpstreamVfsFiles.has(path)) {
+              currentExecutionOriginalFiles.set(path, connectedUpstreamVfsFiles.get(path)!);
+            } else {
+              try {
+                const original = await invoke<string>("read_file_disk", { path });
+                currentExecutionOriginalFiles.set(path, original);
+              } catch {
+                currentExecutionOriginalFiles.set(path, "");
               }
             }
-            await vfs.writeFile(data.path, data.content, nodeId);
-            currentExecutionVfsFiles.set(data.path, data.content);
-            socket.send(JSON.stringify({ type: "write_file_response", requestId: data.requestId }));
-          } catch (err: any) {
-            console.error("WebSocket [write_file] intercept error:", err);
-            socket.send(
-              JSON.stringify({
-                type: "write_file_response",
-                requestId: data.requestId,
-                error: err.message,
-              })
-            );
           }
-          return;
-        }
-
-        if (data.type === "execution_complete" && data.nodeId === nodeId) {
-          const modified = data.result?.modified || [];
-          const responseText = data.result?.response || "Task completed successfully.";
-          console.log("WebSocket [execution_complete] modified files:", modified);
+          await vfs.writeFile(path, content, nodeId);
+          currentExecutionVfsFiles.set(path, content);
+        },
+        onComplete: ({ modified, response: responseText }) => {
+          console.log("[nodeExecutionService] execution_complete modified files:", modified);
           addLog(
             nodeId,
             `AI task execution successfully completed. Modified: ${modified.join(", ") || "none"}`
           );
 
-          // Add assistant message to history
           const assistantMsg = {
             id: `msg_${Date.now()}`,
             role: "assistant" as const,
@@ -496,7 +434,7 @@ export const Workspace: React.FC = () => {
           if (consoleFlushTimeout) clearTimeout(consoleFlushTimeout);
           useWorkspaceStore.getState().updateGlobalChatMessage(nodeId, consoleMessageId, "");
 
-          const uniqueModified: string[] = Array.from(new Set(modified)) as string[];
+          const uniqueModified: string[] = Array.from(new Set(modified));
           const originalFileContents = Object.fromEntries(
             uniqueModified.map((filePath) => [filePath, currentExecutionOriginalFiles.get(filePath) || ""])
           );
@@ -511,17 +449,14 @@ export const Workspace: React.FC = () => {
             generatedFileContents,
           });
           setNodeStatus(nodeId, "success");
-          socket.close();
+          finishRun();
 
           const cleanUpVfsAndTracker = async () => {
-            // Finalize VFS: overwrite tracker and remove stale files
             try {
               await vfs.finalizeExecution(nodeId, uniqueModified, initialNodeFiles);
             } catch (err) {
               console.error("Failed to finalize VFS after execution:", err);
             }
-
-            // Auto-save the canvas tab to reflect changes
             if (targetTabId) {
               try {
                 const { canvasFileService } = await import("./tabs/canvas/services/canvasFileService");
@@ -533,17 +468,32 @@ export const Workspace: React.FC = () => {
           };
 
           cleanUpVfsAndTracker();
-        }
+        },
+        onError: (message) => {
+          if (!connectedToSidecar) {
+            // startRun never resolved -- this is a connection failure, not an
+            // execution error the sidecar reported (Workspace never had a
+            // socket to construct in the first place now; agentHarnessClient
+            // owns the one shared connection instead).
+            console.error("[nodeExecutionService] failed to connect:", message);
+            addLog(nodeId, `Fatal: Failed to connect to agent sidecar: ${message}`);
+            setNodeStatus(nodeId, "error");
+            finishRun();
+            notify(
+              "Sidecar Connection Error",
+              `Could not connect to the agent sidecar: ${message}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
+              "error"
+            );
+            return;
+          }
 
-        if (data.type === "execution_error" && data.nodeId === nodeId) {
-          console.error("WebSocket [execution_error]:", data.error);
-          addLog(nodeId, `AI Execution Error: ${data.error}`);
+          console.error("[nodeExecutionService] execution_error:", message);
+          addLog(nodeId, `AI Execution Error: ${message}`);
 
-          // Add assistant error message to history
           const assistantMsg = {
             id: `msg_${Date.now()}`,
             role: "assistant" as const,
-            content: `Execution failed: ${data.error}`,
+            content: `Execution failed: ${message}`,
             timestamp: new Date().toLocaleTimeString()
           };
           store.addGlobalChatMessage(nodeId, assistantMsg);
@@ -551,68 +501,18 @@ export const Workspace: React.FC = () => {
           useWorkspaceStore.getState().updateGlobalChatMessage(nodeId, consoleMessageId, "");
 
           setNodeStatus(nodeId, "error");
-          socket.close();
-          notify("Execution Error", `The sidecar returned an execution error: ${data.error}`, "error");
-        }
-      } catch (err: any) {
-        console.error("WebSocket onmessage processing error:", err);
-        addLog(
-          nodeId,
-          `Client Error: failed to parse/execute sidecar message: ${err.message}`
-        );
-        notify(
-          "Sidecar Communication Error",
-          `Error processing message from sidecar: ${err.message || String(err)}`,
-          "error"
-        );
+          finishRun();
+          notify("Execution Error", `The sidecar returned an execution error: ${message}`, "error");
+        },
       }
-    };
-
-    socket.onerror = (err) => {
-      console.error("Sidecar connection failed:", err);
-      addLog(
-        nodeId,
-        `Fatal: Agent sidecar connection closed unexpectedly. Ensure Express server is running on port ${SIDECAR_PORT}.`
-      );
-      setNodeStatus(nodeId, "error");
-      notify(
-        "Sidecar Connection Failed",
-        `Connection to agent sidecar closed unexpectedly. Ensure Express server is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-    };
-
-    socket.onclose = (event) => {
-      commandPermissionService.removeForSocket(socket);
-      console.log(`[Workspace] WebSocket closed (code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean})`);
-      addLog(nodeId, `WebSocket connection closed (code: ${event.code}, reason: "${event.reason || "none"}", clean: ${event.wasClean})`);
-      socketsRef.current.delete(nodeId);
-      const currentStatus = useWorkspaceStore.getState().nodeStatus[nodeId];
-      if (currentStatus === "running") {
-        setNodeStatus(nodeId, "error");
-        notify(
-          "Connection Lost",
-          `The sidecar connection was closed abnormally (code: ${event.code}). Please retry the execution.`,
-          "error"
-        );
-      }
-      if (socketsRef.current.size === 0) {
-        setExecutingNode(null).catch(err => {
-          console.error(`[Workspace] Failed to clear current executing node:`, err);
-        });
-      }
-    };
+    );
+    socketsRef.current.set(nodeId, run);
   };
 
   const stopExecution = (nodeId: string) => {
     console.log(`[Workspace] Stopping execution for node: ${nodeId}`);
-    const socket = socketsRef.current.get(nodeId);
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "agent_chat_stop", tabId: nodeId }));
-    }
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.close(1000, "User requested stop");
-    }
+    const run = socketsRef.current.get(nodeId);
+    run?.cancel();
     socketsRef.current.delete(nodeId);
     setNodeStatus(nodeId, "idle");
     addLog(nodeId, "Execution stopped by user.");

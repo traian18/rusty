@@ -517,6 +517,13 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       } else if (data.type === "inline_chat_stop") {
         const stopped = await stopPiAgentRun(data.sessionId, "Inline chat stopped by user.");
         safeSend(ws, { type: "inline_chat_stopped", sessionId: data.sessionId, stopped });
+      } else if (data.type === "execute_node_stop") {
+        // Task nodes run through the same runAgentic(tabId: nodeId, ...) path
+        // as agent_chat/inline_chat, so the same activePiRuns registration
+        // (piAgentChat.ts) already exists keyed by nodeId -- this is real
+        // cancellation, not just closing the socket, mirroring the other two.
+        const stopped = await stopPiAgentRun(data.nodeId, "Stop requested by user.");
+        safeSend(ws, { type: "execute_node_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "execute_node") {
         await executeNode(ws, data);
       } else if (data.type === "global_explore") {

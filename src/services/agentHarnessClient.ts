@@ -178,12 +178,15 @@ export class AgentHarnessClient {
 
   async cancelRun(runId: string, routing: Record<string, unknown> = {}): Promise<void> {
     await this.connect();
+    // Every capability's stop message today follows `${type}_stop`
+    // (agent_chat -> agent_chat_stop, inline_chat -> inline_chat_stop,
+    // generate_task_nodes -> generate_task_nodes_stop, and now
+    // execute_node -> execute_node_stop) -- this used to be a hardcoded
+    // 3-way switch that silently fell back to "agent_chat_stop" for any
+    // other capability, which did not generalize. As PR 4b adds a real stop
+    // message for each remaining capability, this needs no further changes.
     const requestType = String(routing.type || "agent_chat");
-    const cancelType = requestType === "inline_chat"
-      ? "inline_chat_stop"
-      : requestType === "generate_task_nodes"
-        ? "generate_task_nodes_stop"
-        : "agent_chat_stop";
+    const cancelType = `${requestType}_stop`;
     this.sendEnvelope({ ...routing, type: cancelType, runId });
   }
 

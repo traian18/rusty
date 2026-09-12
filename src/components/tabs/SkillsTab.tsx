@@ -4,7 +4,7 @@ import { skillsService } from "../../services/skillsService";
 import { Cpu, Plus, Trash2, Save, Wand2, Plug } from "lucide-react";
 import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
-import { selectableProviderModels } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../../config/sidecar";
@@ -244,8 +244,11 @@ export const SkillsTab: React.FC = () => {
     }
   };
 
-  const modelOptions = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
-    .map(({ provider, model }) => ({ id: model.id, name: `${provider.name} / ${model.name}` }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
 
   return (
     <div className="w-full h-full p-8 max-w-5xl mx-auto flex flex-col space-y-6 font-sans text-[var(--text-normal)] overflow-y-auto">
@@ -474,7 +477,9 @@ export const SkillsTab: React.FC = () => {
                         options={modelOptions}
                         value={genModel}
                         onChange={setGenModel}
-                        placeholder="Select model..."
+                        placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+                          ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+                          : "Select model..."}
                       />
                     </div>
                   </div>

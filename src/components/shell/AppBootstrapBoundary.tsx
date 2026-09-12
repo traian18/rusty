@@ -5,6 +5,7 @@ import { startupStateFromResult } from "../../startup/types";
 import { buildRetryStepList } from "../../startup/buildRetryStepList";
 import type { StartupResult, StartupState, StartupStep, StepOutcome } from "../../startup/types";
 import { STARTUP_STEPS } from "./startupSteps";
+import { startProviderCoordinator } from "./providerCoordinator";
 import { AppBootstrapBoundaryView } from "./AppBootstrapBoundary.view";
 
 export type ShellBootstrapStatus = "pending" | "ready" | "failed";
@@ -85,6 +86,18 @@ function beginRun(steps: readonly StartupStep[]): Promise<StartupResult> {
     .then((result) => {
       lastOutcomes = result.outcomes;
       useWorkspaceStore.getState().setStartupState(startupStateFromResult(result));
+      // Started here, not inside a startup step (REFACTOR_PLAN.md PR 3b):
+      // providers don't exist meaningfully in the store until secure-config
+      // has run, and saveSecureConfig is a no-op until secureConfigLoaded
+      // is true, so provider work started any earlier would settle into a
+      // registry nobody can act on and any persistence it later needs
+      // would silently fail. Runs regardless of whether this run ended
+      // ready/degraded/failed -- even after a critical failure, checking
+      // providers against whatever defaults are in the store is harmless,
+      // and "Continue anyway" shouldn't mean waiting even longer for
+      // integrations to settle. Idempotent, so Retry calling beginRun()
+      // again is a no-op here.
+      startProviderCoordinator();
       return result;
     })
     .finally(() => {

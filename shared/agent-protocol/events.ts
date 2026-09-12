@@ -12,6 +12,8 @@
 // unifies these one capability at a time.
 // ============================================================
 
+import type { AgentTerminalState } from "./envelope";
+
 export interface ExecutionCompleteEvent {
   type: "execution_complete";
   nodeId: string;
@@ -180,3 +182,27 @@ export type AgentTerminalEvent =
   | TestBuildErrorEvent
   | InlineChatCompleteEvent
   | InlineChatErrorEvent;
+
+/**
+ * Classifies a raw event-type string into an AgentTerminalState by
+ * *naming convention*, so replay/persistence code can use the shared
+ * state without every capability's event shape being rewritten first.
+ *
+ * This is deliberately naive: it looks only at the type string, not
+ * the payload, so e.g. `test_build_complete` with `success: false`
+ * still classifies as "completed" today (the payload's `success` flag
+ * is not consulted). PR 4b's per-capability migration replaces the
+ * event shape with one carrying an explicit `state` field instead of
+ * relying on this classifier at all; until then, this is the bridge
+ * that lets `AgentTerminalState` be used against events that haven't
+ * been migrated yet.
+ *
+ * Returns undefined for a non-terminal event (e.g. a token/log/status
+ * event), or for a type string this convention can't classify.
+ */
+export function classifyTerminalEvent(eventType: string): AgentTerminalState | undefined {
+  if (eventType.endsWith("_stopped") || eventType.endsWith("_stop")) return "cancelled";
+  if (eventType.endsWith("_error")) return "failed";
+  if (eventType.endsWith("_complete") || eventType.endsWith("_response")) return "completed";
+  return undefined;
+}

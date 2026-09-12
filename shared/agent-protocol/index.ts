@@ -12,3 +12,4 @@ export * from "./envelope";
 export * from "./capabilities";
 export * from "./commands";
 export * from "./events";
+export * from "./errors";

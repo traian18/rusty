@@ -26,6 +26,7 @@ export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExec
   const nodes = useWorkspaceStore((state) => state.nodes);
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const updateTaskNode = useWorkspaceStore((state) => state.updateTaskNode);
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
@@ -244,7 +245,7 @@ export const TaskTab: React.FC<TaskTabProps> = ({ tab, onExecuteNode, onStopExec
             <CustomSelect
               value={(taskNode.data as any).model || activeModel}
               onChange={(val) => updateTaskNode(taskNodeId, { model: val })}
-              options={selectableProviderModels(customProviders, activeCustomProviderId).map(({ model }) => ({
+              options={selectableProviderModels(customProviders, providerStatus, activeCustomProviderId).map(({ model }) => ({
                 id: model.id,
                 name: `${model.name} (${model.id})`,
               }))}

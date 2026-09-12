@@ -25,6 +25,7 @@ export const SkillsTab: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const mcpServers = useWorkspaceStore((state) => state.mcpServers);
 
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
@@ -223,7 +224,7 @@ export const SkillsTab: React.FC = () => {
     }
   };
 
-  const modelOptions = selectableProviderModels(customProviders, activeCustomProviderId)
+  const modelOptions = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
     .map(({ provider, model }) => ({ id: model.id, name: `${provider.name} / ${model.name}` }));
 
   return (

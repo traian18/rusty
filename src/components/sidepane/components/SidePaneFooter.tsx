@@ -44,8 +44,14 @@ export const SidePaneFooter: React.FC<SidePaneFooterProps> = ({
   onExecute,
   onStop,
 }) => {
+  // Read directly rather than threading a new prop through SidePane.tsx --
+  // this component already imports useWorkspaceStore for its imperative
+  // updateTaskNode call below, so a selector hook here is consistent with
+  // that, not a new pattern (REFACTOR_PLAN.md PR 3c).
+  const providerStatus = useWorkspaceStore((s) => s.providerStatus);
   const modelOptions = selectableProviderModels(
     customProviders,
+    providerStatus,
     activeCustomProviderId
   ).map(({ model }) => ({
     id: model.id,

@@ -23,6 +23,7 @@ export const InlineChat = ({ sessionId, context, position, onClose }: InlineChat
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const providers = useWorkspaceStore((state) => state.customProviders);
   const activeProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const [selectedModel, setSelectedModel] = useState(activeModel);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<InlineChatMessage[]>([]);
@@ -45,7 +46,7 @@ export const InlineChat = ({ sessionId, context, position, onClose }: InlineChat
     };
   }, []);
 
-  const modelOptions = selectableProviderModels(providers, activeProviderId)
+  const modelOptions = selectableProviderModels(providers, providerStatus, activeProviderId)
     .map(({ provider, model }) => ({ id: model.id, name: `${provider.name} / ${model.name}` }));
 
   useEffect(() => {

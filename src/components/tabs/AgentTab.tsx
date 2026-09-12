@@ -30,6 +30,7 @@ interface SavedChat {
 export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const setActiveModel = useWorkspaceStore((state) => state.setActiveModel);
   const agentChats = useWorkspaceStore((state) => state.agentChats[tab.id] || []);
@@ -79,7 +80,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const lastUserMessageIdRef = useRef<string | null>(null);
   const lastConsoleMessageIdRef = useRef<string | null>(null);
 
-  const modelOptions = selectableProviderModels(customProviders, activeCustomProviderId)
+  const modelOptions = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
     .map(({ model }) => ({
       id: model.id,
       name: `${model.name} (${model.id})`,

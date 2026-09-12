@@ -36,6 +36,7 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
 
   // Resize hook
   const { width, containerRef, startResizing } = useResizable(500, "reconciliation_graph_pane_width");
@@ -906,10 +907,10 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
 
   // Compile list of available models
   const availableModels = useMemo(() => {
-    const configuredModels = selectableProviderModels(customProviders, activeCustomProviderId)
+    const configuredModels = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
       .map(({ model }) => model.id);
     return Array.from(new Set(configuredModels));
-  }, [activeCustomProviderId, customProviders]);
+  }, [activeCustomProviderId, customProviders, providerStatus]);
 
   const modelOptions = useMemo(() => {
     return availableModels.map((m) => ({ id: m, name: m }));

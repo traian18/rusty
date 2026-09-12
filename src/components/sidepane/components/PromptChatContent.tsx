@@ -26,8 +26,9 @@ const ModelSelector: React.FC<{ nodeId: string; nodeData: any }> = ({ nodeId, no
   const activeModel = useWorkspaceStore((s) => s.activeModel);
   const providers = useWorkspaceStore((s) => s.customProviders);
   const activeProviderId = useWorkspaceStore((s) => s.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((s) => s.providerStatus);
   const updateTaskNode = useWorkspaceStore((s) => s.updateTaskNode);
-  const modelOptions = selectableProviderModels(providers, activeProviderId)
+  const modelOptions = selectableProviderModels(providers, providerStatus, activeProviderId)
     .map(({ model }) => ({ id: model.id, name: model.name }));
   return (
     <CustomSelect

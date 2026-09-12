@@ -166,7 +166,8 @@ export const useExplorerWebSocket = (selectedNode: any) => {
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const providers = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
-  const filteredProviders = selectableModelProviders(providers, activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
+  const filteredProviders = selectableModelProviders(providers, providerStatus, activeCustomProviderId);
   const activeProvider = filteredProviders.find((p) => p.id === activeCustomProviderId);
   const availableModels = activeProvider
     ? activeProvider.models.filter((model) => model.supported !== false).flatMap(providerModelVariants)

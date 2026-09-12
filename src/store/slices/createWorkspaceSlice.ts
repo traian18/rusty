@@ -40,10 +40,26 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
       nodeLogs: {},
       nodeStatus: {},
     });
-    void get().loadGitStatus();
-    void get().loadSkills();
-    void get().loadMetricsSummary();
+    void get().loadWorkspaceData();
     setTimeout(() => void get().saveSecureConfig(), 0);
+  },
+
+  // Extracted so the startup workspace-restore step (REFACTOR_PLAN.md PR 3a)
+  // can call exactly this and nothing else -- unlike setRootPath, restore
+  // must NOT reset tabs/canvases/nodes (that would make a retry
+  // destructive) or touch the previous_workspaces MRU or fire
+  // saveSecureConfig (the latter would race secureConfigLoaded, see
+  // createIntegrationSlice.ts). Promise.allSettled rather than three
+  // fire-and-forget calls: all three already swallow their own errors
+  // (loadGitStatus/loadSkills log and return; loadMetricsSummary's service
+  // resolves null on failure), but a future change to any one of them
+  // throwing should not silently cancel the other two.
+  loadWorkspaceData: async () => {
+    await Promise.allSettled([
+      get().loadGitStatus(),
+      get().loadSkills(),
+      get().loadMetricsSummary(),
+    ]);
   },
 
   setFileTree: (tree) => set({ fileTree: tree }),

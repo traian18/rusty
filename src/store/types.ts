@@ -339,6 +339,12 @@ export interface WorkspaceState {
   hydrateShortcuts: () => void;
 
   setRootPath: (path: string) => void;
+  /** Git status + skills + metrics for the current rootPath, settled
+      together via Promise.allSettled so one throwing doesn't stop the
+      others -- the shared tail setRootPath already ran; the startup
+      workspace-restore step (REFACTOR_PLAN.md PR 3a) calls it too, which is
+      what makes a restored workspace load metrics, not just fileTree. */
+  loadWorkspaceData: () => Promise<void>;
   setGitStatus: (status: GitStatusResult | null) => void;
   loadGitStatus: (rootDir?: string) => Promise<void>;
   setFileTree: (tree: any[]) => void;

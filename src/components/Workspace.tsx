@@ -18,6 +18,7 @@ import { createAgentHarnessSocket } from "../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../config/sidecar";
 import { appendBoundedText } from "../services/boundedTextBuffer";
 import { invoke } from "@tauri-apps/api/core";
+import { resolveExecutionProvider } from "../store/resolveExecutionProvider";
 
 export const Workspace: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
@@ -71,6 +72,30 @@ export const Workspace: React.FC = () => {
     
     if (!node || node.type !== "taskNode") return;
 
+    const activeModel = storeState.activeModel;
+    const customProviders = storeState.customProviders;
+    const activeCustomProviderId = storeState.activeCustomProviderId;
+    const nodeModel = (node.data as any).model || activeModel;
+
+    // Resolved -- and, since REFACTOR_PLAN.md PR 3c, gated -- before any VFS
+    // prep or socket work: a blocked execution should touch nothing.
+    // Previously hand-rolled a `nodeModel.split("/")[0]` provider lookup
+    // here (the one execution site that never adopted
+    // providerHasModelReference); resolveExecutionProvider replaces it and
+    // adds the check every other execution site already needed.
+    const resolution = resolveExecutionProvider(
+      customProviders,
+      storeState.providerStatus,
+      activeCustomProviderId,
+      nodeModel,
+    );
+    if (!resolution.ok) {
+      notify("Cannot run this node", resolution.message, "error");
+      setNodeStatus(nodeId, "error");
+      return;
+    }
+    const provider = resolution.provider;
+
     // Prepare the VFS for this node's execution (query current files, then clear them)
     const vfs = VfsRegistry.getOrCreate(targetTabId);
     let initialNodeFiles: string[] = [];
@@ -89,21 +114,6 @@ export const Workspace: React.FC = () => {
     const tabCtx = targetTabId ? storeState.canvasContexts[targetTabId] : null;
     const currentNodes = tabCtx ? tabCtx.nodes : storeState.nodes;
     const currentEdges = tabCtx ? tabCtx.edges : storeState.edges;
-
-    const activeModel = storeState.activeModel;
-    const customProviders = storeState.customProviders;
-    const activeCustomProviderId = storeState.activeCustomProviderId;
-
-    const nodeModel = (node.data as any).model || activeModel;
-
-    // Resolve provider for the node's model
-    let provider = null;
-    if (nodeModel && (nodeModel as string).includes("/")) {
-      const providerId = (nodeModel as string).split("/")[0];
-      provider = customProviders.find((p) => p.id === providerId);
-    } else {
-      provider = customProviders.find((p) => p.id === activeCustomProviderId);
-    }
 
     // Resolve skill — fall back to BUILD so a TaskNode is
     // never sent to the sidecar with a null skill.
@@ -356,7 +366,7 @@ export const Workspace: React.FC = () => {
             mcpContext,
             upstreamTaskContext,
             chatHistory: chatHistoryToSend,
-          customProvider: provider || null,
+          customProvider: provider,
           skill: skillData,
           lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },
         })

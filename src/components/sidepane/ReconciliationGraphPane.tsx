@@ -14,7 +14,7 @@ import { AgentActivityCard } from "../ui/SubagentActivityPanel";
 import { useConfirm } from "../useConfirm";
 import { reconciliationService, withoutReconciliationFiles } from "../../services/reconciliationService";
 import { buildReconciliationTaskFileRecords, normalizeReconciliationPath } from "../../services/reconciliationPaths";
-import { selectableProviderModels } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { VfsExplorer } from "./components/VfsExplorer";
 import type { ReconciliationLedgerEntry, ReconciliationSnapshot } from "../../store/types";
@@ -921,21 +921,21 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
     void startReconciliation(text, chatFilePath);
   };
 
-  // Compile list of available models
-  const availableModels = useMemo(() => {
-    const configuredModels = selectableProviderModels(customProviders, providerStatus, activeCustomProviderId)
-      .map(({ model }) => model.id);
-    return Array.from(new Set(configuredModels));
-  }, [activeCustomProviderId, customProviders, providerStatus]);
-
-  const modelOptions = useMemo(() => {
-    return availableModels.map((m) => ({ id: m, name: m }));
-  }, [availableModels]);
+  // Was: a hand-rolled Set of bare model ids used as both id AND name --
+  // the one picker in the app that lost provider disambiguation entirely,
+  // and (via its own useMemo) the only one that memoized before this hook
+  // existed (REFACTOR_PLAN.md PR 3c).
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
 
   useEffect(() => {
-    if (availableModels.includes(selectedModel)) return;
-    setSelectedModel(availableModels.includes(activeModel) ? activeModel : availableModels[0] || "");
-  }, [activeModel, availableModels, selectedModel]);
+    if (modelOptions.some((option) => option.id === selectedModel)) return;
+    const fallback = modelOptions.some((option) => option.id === activeModel) ? activeModel : modelOptions[0]?.id || "";
+    setSelectedModel(fallback);
+  }, [activeModel, modelOptions, selectedModel]);
 
   const duplicateFilesEntries = Object.entries(duplicateFiles);
   const duplicatePathSet = new Set(Object.keys(duplicateFiles));
@@ -985,7 +985,9 @@ export const ReconciliationGraphPane: React.FC<ReconciliationGraphPaneProps> = (
               value={selectedModel}
               onChange={(val) => setSelectedModel(val)}
               options={modelOptions}
-              placeholder="Select Model"
+              placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+                ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+                : "Select Model"}
               className="w-40 text-xs font-mono"
               direction="down"
             />

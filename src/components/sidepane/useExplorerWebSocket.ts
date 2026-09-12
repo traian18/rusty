@@ -11,15 +11,15 @@ import {
   GLOBAL_CHAT_SKILL_IDS,
 } from "../../config/skillDefinitions";
 import type { AgentQuestion } from "../ui/ChatInput";
-import { commandPermissionService, handleCommandPermissionMessage } from "../../services/commandPermissionService";
 import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
 import { invoke } from "@tauri-apps/api/core";
 import { providerModelVariants, selectableModelProviders } from "../../store/providerHelpers";
 import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
-import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
-import { SIDECAR_PORT, SIDECAR_WS_URL } from "../../config/sidecar";
+import { agentChatService, AgentChatRun } from "../../services/agentChatService";
+import { globalExploreService } from "../../services/globalExploreService";
+import { taskGenerationService, TaskGenerationRun } from "../../services/taskGenerationService";
 export interface GeneratedTaskDraft {
   key: string;
   title: string;
@@ -42,11 +42,11 @@ export interface TaskGenerationFailure {
   attempts?: number;
 }
 
-const activeExplorerSockets = new Map<string, WebSocket>();
+const activeExplorerChatRuns = new Map<string, AgentChatRun>();
 const activeExplorerSubagents = new Map<string, SubagentActivity[]>();
 
 interface ActiveTaskGeneration {
-  socket: WebSocket;
+  run: TaskGenerationRun;
   requestId: string;
 }
 
@@ -88,11 +88,11 @@ const setActiveTaskGeneration = (nodeId: string, generation: ActiveTaskGeneratio
 
 const finishTaskGeneration = (
   nodeId: string,
-  socket: WebSocket,
+  run: TaskGenerationRun,
   updates: Partial<TaskGenerationViewState> = {},
 ) => {
   const active = activeTaskGenerations.get(nodeId);
-  if (active?.socket === socket) activeTaskGenerations.delete(nodeId);
+  if (active?.run === run) activeTaskGenerations.delete(nodeId);
   taskGenerationViewStates.set(nodeId, { ...getTaskGenerationViewState(nodeId), ...updates });
   publishTaskGenerationChange(nodeId);
 };
@@ -151,8 +151,8 @@ export const useExplorerWebSocket = (selectedNode: any) => {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [subagents, setSubagents] = useState<SubagentActivity[]>([]);
   const [agentQuestion, setAgentQuestion] = useState<AgentQuestion | null>(null);
-  const explorerSocketRef = useRef<WebSocket | null>(null);
-  const taskGenerationSocketRef = useRef<WebSocket | null>(null);
+  const explorerRunRef = useRef<AgentChatRun | null>(null);
+  const taskGenerationRunRef = useRef<TaskGenerationRun | null>(null);
   const taskGenerationRequestIdRef = useRef<string | null>(null);
   const consoleMessageIdRef = useRef<string | null>(null);
   const consoleBufferRef = useRef<string>("");
@@ -186,9 +186,9 @@ export const useExplorerWebSocket = (selectedNode: any) => {
 
   useEffect(() => {
     if (selectedNodeId) {
-      const existing = activeExplorerSockets.get(selectedNodeId);
-      if (existing && existing.readyState === WebSocket.OPEN) {
-        explorerSocketRef.current = existing;
+      const existing = activeExplorerChatRuns.get(selectedNodeId);
+      if (existing) {
+        explorerRunRef.current = existing;
       }
       const history = useWorkspaceStore.getState().globalChatHistory[selectedNodeId] || [];
       const activeConsole = [...history].reverse().find((message) => message.role === "console");
@@ -203,7 +203,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
   useEffect(() => {
     const syncTaskGeneration = () => {
       if (!selectedNodeId) {
-        taskGenerationSocketRef.current = null;
+        taskGenerationRunRef.current = null;
         taskGenerationRequestIdRef.current = null;
         setIsGeneratingTasks(false);
         setIsTaskGenerationPromptOpen(false);
@@ -215,11 +215,8 @@ export const useExplorerWebSocket = (selectedNode: any) => {
       }
 
       const active = activeTaskGenerations.get(selectedNodeId);
-      const isActive = !!active && (
-        active.socket.readyState === WebSocket.CONNECTING || active.socket.readyState === WebSocket.OPEN
-      );
-      if (active && !isActive) activeTaskGenerations.delete(selectedNodeId);
-      taskGenerationSocketRef.current = isActive ? active!.socket : null;
+      const isActive = !!active;
+      taskGenerationRunRef.current = isActive ? active!.run : null;
       taskGenerationRequestIdRef.current = isActive ? active!.requestId : null;
       setIsGeneratingTasks(isActive);
 
@@ -320,85 +317,55 @@ export const useExplorerWebSocket = (selectedNode: any) => {
     setNodeStatus(selectedNodeId, "running");
     addLog(selectedNodeId, `User prompt: ${userMessage.content}`);
 
-    console.log(`[SidePane] Connecting to ${SIDECAR_WS_URL}...`);
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      explorerSocketRef.current = socket;
-      if (selectedNodeId) {
-        activeExplorerSockets.set(selectedNodeId, socket);
-      }
-    } catch (err: any) {
-      console.error("Failed to construct Explorer WebSocket:", err);
-      addLog(selectedNodeId, `Fatal: Failed to construct Explorer WebSocket: ${err.message}`);
-      setNodeStatus(selectedNodeId, "error");
-      const errorMsg = {
-        role: "assistant" as const,
-        content: `Connection failed: ${err.message || String(err)}`,
-        timestamp: new Date().toLocaleTimeString()
-      };
-      addGlobalChatMessage(selectedNodeId, errorMsg);
-      notify(
-        "Sidecar Connection Error",
-        `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
+    const rootPath = useWorkspaceStore.getState().rootPath;
+    const currentProviders = useWorkspaceStore.getState().customProviders;
+    const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+    const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
+    const currentActiveModel = useWorkspaceStore.getState().activeModel;
+    const currentExploreModel = selectedNode?.data?.exploreModel || selectedNode?.data?.model || currentActiveModel;
+    const resolution = resolveExecutionProvider(
+      currentProviders,
+      currentProviderStatus,
+      currentActiveProviderId,
+      currentExploreModel,
+    );
+    if (!resolution.ok) {
+      notify("Cannot start exploration", resolution.message, "error");
+      setNodeStatus(selectedNodeId, "idle");
       return;
     }
+    const prov = resolution.provider;
+    const chatHistory = useWorkspaceStore.getState().globalChatHistory[selectedNodeId] || [];
 
-    socket.onopen = () => {
-      console.log(`[SidePane] WebSocket connected!`);
-      addLog(selectedNodeId, "Connected to agent sidecar for global exploration...");
+    const isTaskNodeChat = selectedNode?.type === "taskNode";
 
-      const rootPath = useWorkspaceStore.getState().rootPath;
-      const currentProviders = useWorkspaceStore.getState().customProviders;
-      const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
-      const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
-      const currentActiveModel = useWorkspaceStore.getState().activeModel;
-      const currentExploreModel = selectedNode?.data?.exploreModel || selectedNode?.data?.model || currentActiveModel;
-      const resolution = resolveExecutionProvider(
-        currentProviders,
-        currentProviderStatus,
-        currentActiveProviderId,
-        currentExploreModel,
-      );
-      if (!resolution.ok) {
-        notify("Cannot start exploration", resolution.message, "error");
-        socket.close();
-        return;
-      }
-      const prov = resolution.provider;
-      const chatHistory = useWorkspaceStore.getState().globalChatHistory[selectedNodeId] || [];
+    // TaskNode chat honors the skill selected in its pane. Other node-chat
+    // surfaces keep the planning-only behavior, including for older canvases.
+    const skills = useWorkspaceStore.getState().skills;
+    const requestedSkillId = selectedNode?.data?.skillId as string | undefined;
+    const nodeSkillId = isTaskNodeChat
+      ? requestedSkillId || BUILT_IN_SKILL_IDS.BUILD
+      : requestedSkillId && GLOBAL_CHAT_SKILL_IDS.includes(requestedSkillId)
+        ? requestedSkillId
+        : GLOBAL_CHAT_DEFAULT_SKILL_ID;
+    const resolvedSkill = resolveSkill(skills, nodeSkillId);
+    const skillData = toSkillData(resolvedSkill);
 
-      const isTaskNodeChat = selectedNode?.type === "taskNode";
+    // Build MCP server list from:
+    //  1. The active skill's mcpServers (by name → resolved from the store)
+    //  2. Any explicit MCP server override selected directly on the node
+    const mcpServerName = selectedNode?.data?.mcpServerName as string | undefined;
+    const mcpServersMap = useWorkspaceStore.getState().mcpServers;
+    const mcpServerNames = Array.from(new Set([
+      ...(resolvedSkill?.mcpServers || []),
+      ...(mcpServerName ? [mcpServerName] : [])
+    ]));
+    const mcpServers = mcpServerNames
+      .map((name) => mcpServersMap[name])
+      .filter((srv): srv is Exclude<typeof srv, undefined> => !!srv);
 
-      // TaskNode chat honors the skill selected in its pane. Other node-chat
-      // surfaces keep the planning-only behavior, including for older canvases.
-      const skills = useWorkspaceStore.getState().skills;
-      const requestedSkillId = selectedNode?.data?.skillId as string | undefined;
-      const nodeSkillId = isTaskNodeChat
-        ? requestedSkillId || BUILT_IN_SKILL_IDS.BUILD
-        : requestedSkillId && GLOBAL_CHAT_SKILL_IDS.includes(requestedSkillId)
-          ? requestedSkillId
-          : GLOBAL_CHAT_DEFAULT_SKILL_ID;
-      const resolvedSkill = resolveSkill(skills, nodeSkillId);
-      const skillData = toSkillData(resolvedSkill);
-
-      // Build MCP server list from:
-      //  1. The active skill's mcpServers (by name → resolved from the store)
-      //  2. Any explicit MCP server override selected directly on the node
-      const mcpServerName = selectedNode?.data?.mcpServerName as string | undefined;
-      const mcpServersMap = useWorkspaceStore.getState().mcpServers;
-      const mcpServerNames = Array.from(new Set([
-        ...(resolvedSkill?.mcpServers || []),
-        ...(mcpServerName ? [mcpServerName] : [])
-      ]));
-      const mcpServers = mcpServerNames
-        .map((name) => mcpServersMap[name])
-        .filter((srv): srv is Exclude<typeof srv, undefined> => !!srv);
-
-      socket.send(JSON.stringify({
-        type: "agent_chat",
+    const run = agentChatService.send(
+      {
         tabId: selectedNodeId,
         message: userMessage.content,
         workspaceRoot: rootPath,
@@ -412,175 +379,109 @@ export const useExplorerWebSocket = (selectedNode: any) => {
         planOnly: !isTaskNodeChat,
         vfsOnly: isTaskNodeChat,
         lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },
-      }));
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (handleCommandPermissionMessage(msg, socket)) return;
-        if (msg.type === "command_output" && msg.sessionId === selectedNodeId) {
-          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, msg.content);
+      },
+      {
+        onConnected: () => {
+          addLog(selectedNodeId, "Connected to agent sidecar for global exploration...");
+        },
+        onCommandOutput: (content) => {
+          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, content);
           scheduleConsoleFlush();
-          return;
-        }
-        if (msg.type === "command_complete" && msg.sessionId === selectedNodeId) {
+        },
+        onCommandComplete: () => {
           scheduleTreeRefresh();
-          return;
-        }
-        if (msg.type === "log" && msg.tabId === selectedNodeId) {
-          addLog(selectedNodeId, msg.message);
-          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `${msg.message}\n`);
+        },
+        onLog: (message) => {
+          addLog(selectedNodeId, message);
+          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `${message}\n`);
           scheduleConsoleFlush();
-          return;
-        }
-
-        if (msg.type === "subagent_update" && msg.tabId === selectedNodeId && msg.subagent?.id) {
-          setSubagents(mergeSubagentUpdate(selectedNodeId, msg.subagent as IncomingSubagent));
+        },
+        onSubagentUpdate: (subagent) => {
+          if (!(subagent as IncomingSubagent)?.id) return;
+          setSubagents(mergeSubagentUpdate(selectedNodeId, subagent as IncomingSubagent));
           window.dispatchEvent(new CustomEvent("rusty-explorer-subagents-changed", { detail: { nodeId: selectedNodeId } }));
-          return;
-        }
-
-        if (msg.type === "agent_question" && msg.tabId === selectedNodeId && msg.requestId) {
-          setAgentQuestion({
-            requestId: msg.requestId,
-            question: String(msg.question || "The agent needs your input."),
-            options: Array.isArray(msg.options) ? msg.options : [],
-          });
-          return;
-        }
-
-        if (msg.type === "read_file") {
-          console.log(`[SidePane] Tool request: read_file ${msg.path}`);
-          void (async () => {
-            try {
-              let content: string;
-              if (selectedNode?.type === "taskNode" && tabId) {
-                const canvasContext = useWorkspaceStore.getState().canvasContexts[tabId];
-                const currentNode = canvasContext?.nodes.find((node) => node.id === selectedNodeId);
-                const ownFiles = (currentNode?.data?.generatedFileContents as Record<string, string>) || {};
-                const connectedUpstreamFiles = new Map<string, string>();
-                for (const edge of canvasContext?.edges || []) {
-                  if (
-                    edge.target !== selectedNodeId ||
-                    edge.sourceHandle !== "task-out" ||
-                    edge.targetHandle !== "task-in"
-                  ) continue;
-                  const upstreamNode = canvasContext?.nodes.find((node) => node.id === edge.source);
-                  const upstreamFiles = (upstreamNode?.data?.generatedFileContents as Record<string, string>) || {};
-                  Object.entries(upstreamFiles).forEach(([filePath, fileContent]) => {
-                    connectedUpstreamFiles.set(filePath, fileContent);
-                  });
-                }
-                content = ownFiles[msg.path] !== undefined
-                  ? ownFiles[msg.path]
-                  : connectedUpstreamFiles.has(msg.path)
-                    ? connectedUpstreamFiles.get(msg.path)!
-                    : await invoke<string>("read_file_disk", { path: msg.path });
-              } else {
-                content = await VfsRegistry.getOrCreate(tabId).readFile(msg.path);
-              }
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({
-                  type: "read_file_response",
-                  requestId: msg.requestId,
-                  content,
-                }));
-              }
-            } catch (err: any) {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({
-                  type: "read_file_response",
-                  requestId: msg.requestId,
-                  error: err.message || String(err),
-                }));
-              }
+        },
+        onAgentQuestion: (question) => {
+          setAgentQuestion(question);
+        },
+        onReadFile: async (path) => {
+          console.log(`[SidePane] Tool request: read_file ${path}`);
+          if (selectedNode?.type === "taskNode" && tabId) {
+            const canvasContext = useWorkspaceStore.getState().canvasContexts[tabId];
+            const currentNode = canvasContext?.nodes.find((node) => node.id === selectedNodeId);
+            const ownFiles = (currentNode?.data?.generatedFileContents as Record<string, string>) || {};
+            const connectedUpstreamFiles = new Map<string, string>();
+            for (const edge of canvasContext?.edges || []) {
+              if (
+                edge.target !== selectedNodeId ||
+                edge.sourceHandle !== "task-out" ||
+                edge.targetHandle !== "task-in"
+              ) continue;
+              const upstreamNode = canvasContext?.nodes.find((node) => node.id === edge.source);
+              const upstreamFiles = (upstreamNode?.data?.generatedFileContents as Record<string, string>) || {};
+              Object.entries(upstreamFiles).forEach(([filePath, fileContent]) => {
+                connectedUpstreamFiles.set(filePath, fileContent);
+              });
             }
-          })();
-          return;
-        }
-
-        if (msg.type === "write_file") {
+            return ownFiles[path] !== undefined
+              ? ownFiles[path]
+              : connectedUpstreamFiles.has(path)
+                ? connectedUpstreamFiles.get(path)!
+                : await invoke<string>("read_file_disk", { path });
+          }
+          return VfsRegistry.getOrCreate(tabId).readFile(path);
+        },
+        onWriteFile: async (path, content) => {
           if (selectedNode?.type === "globalChatNode") {
             const error = "Global Chat is planning-only and cannot write files to the VFS. Use write_plan for plans.";
             addLog(selectedNodeId, error);
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "write_file_response", requestId: msg.requestId, error }));
-            }
-            return;
+            throw new Error(error);
           }
-          void (async () => {
+          const store = useWorkspaceStore.getState();
+          const currentNode = tabId
+            ? store.canvasContexts[tabId]?.nodes.find((node) => node.id === selectedNodeId)
+            : undefined;
+          const originalFileContents = (currentNode?.data?.originalFileContents as Record<string, string>) || {};
+          const generatedFileContents = (currentNode?.data?.generatedFileContents as Record<string, string>) || {};
+          let original = originalFileContents[path];
+          if (selectedNode?.type === "taskNode" && original === undefined) {
             try {
-              const store = useWorkspaceStore.getState();
-              const currentNode = tabId
-                ? store.canvasContexts[tabId]?.nodes.find((node) => node.id === selectedNodeId)
-                : undefined;
-              const originalFileContents = (currentNode?.data?.originalFileContents as Record<string, string>) || {};
-              const generatedFileContents = (currentNode?.data?.generatedFileContents as Record<string, string>) || {};
-              let original = originalFileContents[msg.path];
-              if (selectedNode?.type === "taskNode" && original === undefined) {
-                try {
-                  original = await invoke<string>("read_file_disk", { path: msg.path });
-                } catch {
-                  original = "";
-                }
-              }
-
-              await VfsRegistry.getOrCreate(tabId).writeFile(msg.path, msg.content, selectedNodeId || undefined);
-              if (selectedNode?.type === "taskNode" && selectedNodeId) {
-                store.updateTaskNode(selectedNodeId, {
-                  modifiedFiles: Array.from(new Set([
-                    ...(((currentNode?.data?.modifiedFiles as string[]) || [])),
-                    msg.path,
-                  ])),
-                  originalFileContents: { ...originalFileContents, [msg.path]: original || "" },
-                  generatedFileContents: { ...generatedFileContents, [msg.path]: msg.content },
-                });
-              }
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_file_response", requestId: msg.requestId }));
-              }
-            } catch (err: any) {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_file_response", requestId: msg.requestId, error: err.message || String(err) }));
-              }
+              original = await invoke<string>("read_file_disk", { path });
+            } catch {
+              original = "";
             }
-          })();
-          return;
-        }
+          }
 
-        if (msg.type === "write_plan") {
-          void (async () => {
-            try {
-              if (selectedNode?.type !== "globalChatNode") {
-                throw new Error("The write_plan tool is only available to Global Chat.");
-              }
-              const filename = String(msg.filename || "");
-              if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.md$/.test(filename)) {
-                throw new Error("Plan filename must be a Markdown filename using only letters, numbers, hyphens, or underscores.");
-              }
-              const rootPath = useWorkspaceStore.getState().rootPath?.replace(/[\\/]+$/, "");
-              if (!rootPath) throw new Error("No project root is open.");
-              const separator = rootPath.includes("\\") ? "\\" : "/";
-              const planPath = `${rootPath}${separator}plans${separator}${filename}`;
-              await invoke("write_file_disk", { path: planPath, content: String(msg.content || ""), tabId });
-              scheduleTreeRefresh();
-              addLog(selectedNodeId, `Saved plan to ${planPath}`);
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_plan_response", requestId: msg.requestId, path: planPath }));
-              }
-            } catch (err: any) {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ type: "write_plan_response", requestId: msg.requestId, error: err.message || String(err) }));
-              }
-            }
-          })();
-          return;
-        }
-
-        if (msg.type === "agent_chat_complete" && msg.tabId === selectedNodeId) {
-          console.log(`[SidePane] Exploration complete! Response length: ${msg.response?.length || 0}`);
-          const responseText = msg.response || "Exploration complete.";
+          await VfsRegistry.getOrCreate(tabId).writeFile(path, content, selectedNodeId || undefined);
+          if (selectedNode?.type === "taskNode" && selectedNodeId) {
+            store.updateTaskNode(selectedNodeId, {
+              modifiedFiles: Array.from(new Set([
+                ...(((currentNode?.data?.modifiedFiles as string[]) || [])),
+                path,
+              ])),
+              originalFileContents: { ...originalFileContents, [path]: original || "" },
+              generatedFileContents: { ...generatedFileContents, [path]: content },
+            });
+          }
+        },
+        onWritePlan: async (filename, content) => {
+          if (selectedNode?.type !== "globalChatNode") {
+            throw new Error("The write_plan tool is only available to Global Chat.");
+          }
+          if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.md$/.test(filename)) {
+            throw new Error("Plan filename must be a Markdown filename using only letters, numbers, hyphens, or underscores.");
+          }
+          const planRoot = useWorkspaceStore.getState().rootPath?.replace(/[\\/]+$/, "");
+          if (!planRoot) throw new Error("No project root is open.");
+          const separator = planRoot.includes("\\") ? "\\" : "/";
+          const planPath = `${planRoot}${separator}plans${separator}${filename}`;
+          await invoke("write_file_disk", { path: planPath, content, tabId });
+          scheduleTreeRefresh();
+          addLog(selectedNodeId, `Saved plan to ${planPath}`);
+          return planPath;
+        },
+        onComplete: (responseText) => {
+          console.log(`[SidePane] Exploration complete! Response length: ${responseText.length}`);
           const assistantMsg = {
             id: `msg_${Date.now()}`,
             role: "assistant" as const,
@@ -600,15 +501,15 @@ export const useExplorerWebSocket = (selectedNode: any) => {
 
           setNodeStatus(selectedNodeId, "success");
           addLog(selectedNodeId, "Global exploration completed successfully.");
-          socket.close();
-        }
-
-        if (msg.type === "agent_chat_error" && msg.tabId === selectedNodeId) {
-          console.log(`[SidePane] Exploration error: ${msg.error}`);
+          activeExplorerChatRuns.delete(selectedNodeId);
+          explorerRunRef.current = null;
+        },
+        onError: (message) => {
+          console.log(`[SidePane] Exploration error: ${message}`);
           const errorMsg = {
             id: `msg_${Date.now()}`,
             role: "assistant" as const,
-            content: `Error: ${msg.error}`,
+            content: `Error: ${message}`,
             timestamp: new Date().toLocaleTimeString()
           };
           addGlobalChatMessage(selectedNodeId, errorMsg);
@@ -621,85 +522,32 @@ export const useExplorerWebSocket = (selectedNode: any) => {
           }
           setStreamingMessageId(null);
           setNodeStatus(selectedNodeId, "error");
-          addLog(selectedNodeId, `Global exploration error: ${msg.error}`);
-          socket.close();
-          notify("Exploration Error", `Exploration failed with error: ${msg.error}`, "error");
-        }
-      } catch (err: any) {
-        console.error(`[SidePane] Parse error:`, err);
-        addLog(selectedNodeId, `Parse error: ${err.message}`);
-        notify("Sidecar Communication Error", `Error processing message from sidecar: ${err.message || String(err)}`, "error");
+          addLog(selectedNodeId, `Global exploration error: ${message}`);
+          activeExplorerChatRuns.delete(selectedNodeId);
+          explorerRunRef.current = null;
+          notify("Exploration Error", `Exploration failed with error: ${message}`, "error");
+        },
       }
-    };
-
-    socket.onerror = (error) => {
-      console.error(`[SidePane] Explorer WebSocket error:`, error);
-      addLog(selectedNodeId, `Connection to sidecar failed. Ensure sidecar is running on port ${SIDECAR_PORT}.`);
-      setNodeStatus(selectedNodeId, "error");
-      const errorMsg = {
-        role: "assistant" as const,
-        content: "Connection failed. Please ensure the agent sidecar is running.",
-        timestamp: new Date().toLocaleTimeString()
-      };
-      addGlobalChatMessage(selectedNodeId, errorMsg);
-      notify(
-        "Sidecar Connection Failed",
-        `Connection to agent sidecar closed unexpectedly. Ensure agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-    };
-
-    socket.onclose = (event) => {
-      commandPermissionService.removeForSocket(socket);
-      console.log(`[SidePane] Explorer WebSocket closed (code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean})`);
-      addLog(selectedNodeId, `Explorer WebSocket closed (code: ${event.code}, reason: "${event.reason || "none"}", clean: ${event.wasClean})`);
-      
-      const currentStatus = useWorkspaceStore.getState().nodeStatus[selectedNodeId];
-      if (currentStatus === "running") {
-        setNodeStatus(selectedNodeId, "error");
-        const errorMsg = {
-          id: `msg_${Date.now()}`,
-          role: "assistant" as const,
-          content: `Connection lost unexpectedly (WebSocket close code: ${event.code}).`,
-          timestamp: new Date().toLocaleTimeString()
-        };
-        addGlobalChatMessage(selectedNodeId, errorMsg);
-        notify(
-          "Connection Lost",
-          `The sidecar connection was closed abnormally (code: ${event.code}).`,
-          "error"
-        );
-      }
-      if (selectedNodeId) {
-        activeExplorerSockets.delete(selectedNodeId);
-      }
-      setStreamingMessageId(null);
-      explorerSocketRef.current = null;
-    };
+    );
+    explorerRunRef.current = run;
+    activeExplorerChatRuns.set(selectedNodeId, run);
   };
 
   const handleStopExplorer = () => {
-    const socket = selectedNodeId ? activeExplorerSockets.get(selectedNodeId) : explorerSocketRef.current;
-    if (socket?.readyState === WebSocket.OPEN && selectedNodeId) {
-      socket.send(JSON.stringify({ type: "agent_chat_stop", tabId: selectedNodeId }));
-      window.setTimeout(() => socket.close(), 250);
-    }
+    const run = selectedNodeId ? activeExplorerChatRuns.get(selectedNodeId) : explorerRunRef.current;
+    run?.cancel();
     if (selectedNodeId) {
-      activeExplorerSockets.delete(selectedNodeId);
+      activeExplorerChatRuns.delete(selectedNodeId);
     }
-    explorerSocketRef.current = null;
+    explorerRunRef.current = null;
     setStreamingMessageId(null);
     setNodeStatus(selectedNodeId || "", "idle");
   };
 
   const handleAgentQuestionAnswer = (answer: string) => {
-    const socket = selectedNodeId ? activeExplorerSockets.get(selectedNodeId) : explorerSocketRef.current;
-    if (!agentQuestion || !socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({
-      type: "agent_question_response",
-      requestId: agentQuestion.requestId,
-      answer,
-    }));
+    const run = selectedNodeId ? activeExplorerChatRuns.get(selectedNodeId) : explorerRunRef.current;
+    if (!agentQuestion || !run) return;
+    run.answerQuestion(agentQuestion.requestId, answer);
     addLog(selectedNodeId || "", `User answer: ${answer}`);
     setAgentQuestion(null);
   };
@@ -717,26 +565,6 @@ export const useExplorerWebSocket = (selectedNode: any) => {
     setNodeStatus(selectedNodeId, "running");
     addLog(selectedNodeId, "Summarizing conversation (focused on recent discussion)...");
 
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      explorerSocketRef.current = socket;
-      if (selectedNodeId) {
-        activeExplorerSockets.set(selectedNodeId, socket);
-      }
-    } catch (err: any) {
-      console.error("Failed to construct Summarize WebSocket:", err);
-      addLog(selectedNodeId, `Fatal: Failed to construct Summarize WebSocket: ${err.message}`);
-      setNodeStatus(selectedNodeId, "error");
-      setIsSummarizing(false);
-      notify(
-        "Sidecar Connection Error",
-        `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-      return;
-    }
-
     // Focus on the most recent portion of the discussion. The user typically
     // iterates over many topics and acts on the latest one, so the summary
     // should capture the current intent rather than earlier tangents.
@@ -748,37 +576,43 @@ export const useExplorerWebSocket = (selectedNode: any) => {
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
       .join("\n\n");
 
-    socket.onopen = () => {
-      const rootPath = useWorkspaceStore.getState().rootPath;
-      const currentProviders = useWorkspaceStore.getState().customProviders;
-      const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
-      const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
-      const currentActiveModel = useWorkspaceStore.getState().activeModel;
-      const currentSummarizeModel = selectedNode?.data?.summarizeModel || currentActiveModel;
-      const resolution = resolveExecutionProvider(
-        currentProviders,
-        currentProviderStatus,
-        currentActiveProviderId,
-        currentSummarizeModel,
-      );
-      if (!resolution.ok) {
-        notify("Cannot summarize", resolution.message, "error");
-        socket.close();
-        return;
-      }
-      const prov = resolution.provider;
+    const rootPath = useWorkspaceStore.getState().rootPath;
+    const currentProviders = useWorkspaceStore.getState().customProviders;
+    const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+    const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
+    const currentActiveModel = useWorkspaceStore.getState().activeModel;
+    const currentSummarizeModel = selectedNode?.data?.summarizeModel || currentActiveModel;
+    const resolution = resolveExecutionProvider(
+      currentProviders,
+      currentProviderStatus,
+      currentActiveProviderId,
+      currentSummarizeModel,
+    );
+    if (!resolution.ok) {
+      notify("Cannot summarize", resolution.message, "error");
+      setNodeStatus(selectedNodeId, "idle");
+      setIsSummarizing(false);
+      return;
+    }
+    const prov = resolution.provider;
 
-      // Always use task-auditor skill for summarization on this node type.
-      const skills = useWorkspaceStore.getState().skills;
-      const auditorSkill = resolveSkill(skills, BUILT_IN_SKILL_IDS.TASK_AUDITOR);
-      const skillData = toSkillData(auditorSkill);
+    // Always use task-auditor skill for summarization on this node type.
+    const skills = useWorkspaceStore.getState().skills;
+    const auditorSkill = resolveSkill(skills, BUILT_IN_SKILL_IDS.TASK_AUDITOR);
+    const skillData = toSkillData(auditorSkill);
 
-      const truncationNote = truncatedCount > 0
-        ? `\n\nNote: This conversation had ${totalCount} total messages; only the last ${recentMessages.length} are included because the user iterates over many topics and the current focus is the most recent discussion.`
-        : "";
+    const truncationNote = truncatedCount > 0
+      ? `\n\nNote: This conversation had ${totalCount} total messages; only the last ${recentMessages.length} are included because the user iterates over many topics and the current focus is the most recent discussion.`
+      : "";
 
-      socket.send(JSON.stringify({
-        type: "global_explore",
+    // Not tracked on explorerRunRef/activeExplorerChatRuns: those are typed to
+    // agent_chat's AgentChatRun (send-message flow) specifically, and (as
+    // before this migration) summarize has no external stop affordance --
+    // the previous code's assignment of this to the same ref as the chat
+    // socket was dead weight, since handleStopExplorer only ever sent an
+    // agent_chat_stop, which a global_explore-capability run never understood.
+    globalExploreService.explore(
+      {
         nodeId: selectedNodeId,
         prompt: `Please summarize the recent portion of the following conversation concisely. The user typically discusses many topics in sequence but only acts on the latest one, so focus the summary on the most recent exchange: what the user wants, what was decided or agreed, and the immediate next steps.${truncationNote}\n\n${conversationText}`,
         workspaceRoot: rootPath,
@@ -786,94 +620,27 @@ export const useExplorerWebSocket = (selectedNode: any) => {
         chatHistory: [],
         customProvider: prov,
         skill: skillData,
-      }));
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "log" && msg.nodeId === selectedNodeId) {
-          addLog(selectedNodeId, msg.message);
-          return;
-        }
-
-        if (msg.type === "read_file") {
-          VfsRegistry.getOrCreate(tabId).readFile(msg.path).then((content: unknown) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "read_file_response",
-                requestId: msg.requestId,
-                content: content as string
-              }));
-            } else {
-              console.warn(`[SidePane] Summarize socket closed before read_file_response could be sent`);
-            }
-          }).catch((err: any) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "read_file_response",
-                requestId: msg.requestId,
-                error: err.message || String(err)
-              }));
-            } else {
-              console.warn(`[SidePane] Summarize socket closed before read_file error could be sent`);
-            }
-          });
-          return;
-        }
-
-        if (msg.type === "global_explore_complete" && msg.nodeId === selectedNodeId) {
-          const summary = msg.response || "Summary not available.";
+      },
+      {
+        onLog: (message) => {
+          addLog(selectedNodeId, message);
+        },
+        onReadFile: (path) => VfsRegistry.getOrCreate(tabId).readFile(path),
+        onComplete: (summary) => {
           setGlobalContextSummary(summary);
           updateNode(selectedNodeId, { summary });
           setNodeStatus(selectedNodeId, "success");
           addLog(selectedNodeId, `Conversation summarized (${summary.length} chars).`);
           setIsSummarizing(false);
-          socket.close();
-        }
-
-        if (msg.type === "global_explore_error" && msg.nodeId === selectedNodeId) {
+        },
+        onError: (message) => {
           setNodeStatus(selectedNodeId, "error");
-          addLog(selectedNodeId, `Summarize error: ${msg.error}`);
+          addLog(selectedNodeId, `Summarize error: ${message}`);
           setIsSummarizing(false);
-          socket.close();
-          notify("Summarize Error", `Summarization failed with error: ${msg.error}`, "error");
-        }
-      } catch (err: any) {
-        addLog(selectedNodeId, `Parse error: ${err.message}`);
-        setIsSummarizing(false);
-        notify("Sidecar Communication Error", `Error processing message from sidecar: ${err.message || String(err)}`, "error");
+          notify("Summarize Error", `Summarization failed with error: ${message}`, "error");
+        },
       }
-    };
-
-    socket.onerror = (error) => {
-      console.error(`[SidePane] Summarize WebSocket error:`, error);
-      addLog(selectedNodeId, "Connection to sidecar failed during summarization.");
-      setNodeStatus(selectedNodeId, "error");
-      setIsSummarizing(false);
-      notify(
-        "Sidecar Connection Failed",
-        `Connection to agent sidecar closed unexpectedly during summarization. Ensure agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-    };
-
-    socket.onclose = (event) => {
-      console.log(`[SidePane] Summarize WebSocket closed (code: ${event.code}, reason: "${event.reason}", clean: ${event.wasClean})`);
-      addLog(selectedNodeId, `Summarize WebSocket closed (code: ${event.code}, reason: "${event.reason || "none"}", clean: ${event.wasClean})`);
-      
-      const currentStatus = useWorkspaceStore.getState().nodeStatus[selectedNodeId];
-      if (currentStatus === "running") {
-        setNodeStatus(selectedNodeId, "error");
-        notify(
-          "Connection Lost",
-          `The sidecar connection was closed abnormally during summarization (code: ${event.code}).`,
-          "error"
-        );
-      }
-      setIsSummarizing(false);
-      explorerSocketRef.current = null;
-    };
+    );
   };
 
   const handleOpenTaskGeneration = () => {
@@ -900,18 +667,23 @@ export const useExplorerWebSocket = (selectedNode: any) => {
     }
 
     const additionalInstructions = getTaskGenerationViewState(taskNodeId).instructions.trim();
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-    } catch (error: any) {
+    const requestId = `tasks_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const state = useWorkspaceStore.getState();
+    const resolution = resolveExecutionProvider(
+      state.customProviders,
+      state.providerStatus,
+      state.activeCustomProviderId,
+      taskGenerationModel,
+    );
+    if (!resolution.ok) {
       updateTaskGenerationViewState(taskNodeId, {
-        failure: { message: error?.message || String(error) },
+        failure: { message: resolution.message },
         promptOpen: true,
       });
-      notify("Sidecar Connection Failed", "Could not connect to the agent sidecar.", "error");
+      notify("Cannot generate tasks", resolution.message, "error");
       return;
     }
-    const requestId = `tasks_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
     taskGenerationViewStates.set(taskNodeId, {
       ...getTaskGenerationViewState(taskNodeId),
       promptOpen: false,
@@ -919,78 +691,49 @@ export const useExplorerWebSocket = (selectedNode: any) => {
       draft: [],
       contextDraft: [],
     });
-    setActiveTaskGeneration(taskNodeId, { socket, requestId });
-    taskGenerationSocketRef.current = socket;
-    taskGenerationRequestIdRef.current = requestId;
-    socket.onopen = () => {
-      const state = useWorkspaceStore.getState();
-      const resolution = resolveExecutionProvider(
-        state.customProviders,
-        state.providerStatus,
-        state.activeCustomProviderId,
-        taskGenerationModel,
-      );
-      if (!resolution.ok) {
-        setActiveTaskGeneration(taskNodeId, null);
-        updateTaskGenerationViewState(taskNodeId, {
-          failure: { message: resolution.message },
-          promptOpen: true,
-        });
-        notify("Cannot generate tasks", resolution.message, "error");
-        socket.close();
-        return;
-      }
-      socket.send(JSON.stringify({
-        type: "generate_task_nodes",
-        requestId,
+
+    const run = taskGenerationService.generate(
+      {
         nodeId: taskNodeId,
+        requestId,
         model: taskGenerationModel,
         chatHistory,
         additionalInstructions,
         workspaceRoot: state.rootPath,
         customProvider: resolution.provider,
-      }));
-    };
-    socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.requestId !== requestId) return;
-        if (message.type === "generate_task_nodes_complete") {
-          const draft = (Array.isArray(message.tasks) ? message.tasks : []).map((task: any, index: number) => ({
+      },
+      {
+        onLog: (message) => {
+          addLog(taskNodeId, message);
+        },
+        onComplete: ({ tasks, contexts }) => {
+          const draft = tasks.map((task: any, index: number) => ({
             key: String(task.key || `task-${index + 1}`),
             title: String(task.title || ""),
             description: String(task.description || ""),
             dependsOn: Array.isArray(task.dependsOn) ? task.dependsOn.map(String) : [],
             selected: true,
           }));
-          const contextDraft = (Array.isArray(message.contexts) ? message.contexts : []).map((context: any, index: number) => ({
+          const contextDraft = contexts.map((context: any, index: number) => ({
             key: String(context.key || `context-${index + 1}`),
             title: String(context.title || `Code context ${index + 1}`),
             content: String(context.content || ""),
             taskKeys: Array.isArray(context.taskKeys) ? context.taskKeys.map(String) : [],
             selected: true,
           }));
-          finishTaskGeneration(taskNodeId, socket, {
+          finishTaskGeneration(taskNodeId, run, {
             draft,
             contextDraft,
             instructions: "",
             failure: null,
             promptOpen: false,
           });
-          socket.close();
-        } else if (message.type === "generate_task_nodes_stopped") {
-          finishTaskGeneration(taskNodeId, socket);
-          socket.close();
-        } else if (message.type === "generate_task_nodes_error") {
-          const failure = {
-            code: typeof message.errorCode === "string" ? message.errorCode : undefined,
-            message: message.error || "The model could not generate tasks.",
-            attempts: typeof message.attempts === "number" ? message.attempts : undefined,
-          };
-          finishTaskGeneration(taskNodeId, socket, {
-            failure,
-            promptOpen: true,
-          });
+        },
+        onStopped: () => {
+          finishTaskGeneration(taskNodeId, run);
+        },
+        onError: (failure) => {
+          finishTaskGeneration(taskNodeId, run, { failure, promptOpen: true });
           if (failure.code === "INVALID_TASK_JSON") {
             notify(
               "Switch Task Generation Model",
@@ -1000,39 +743,21 @@ export const useExplorerWebSocket = (selectedNode: any) => {
           } else {
             notify("Task Generation Failed", failure.message, "error");
           }
-          socket.close();
-        }
-      } catch (error: any) {
-        finishTaskGeneration(taskNodeId, socket, {
-          failure: { message: error.message || String(error) },
-          promptOpen: true,
-        });
-        notify("Task Generation Failed", error.message || String(error), "error");
-        socket.close();
+        },
       }
-    };
-    socket.onerror = () => {
-      finishTaskGeneration(taskNodeId, socket, { promptOpen: true });
-      notify("Sidecar Connection Failed", "Could not connect to the agent sidecar.", "error");
-    };
-    socket.onclose = () => {
-      finishTaskGeneration(taskNodeId, socket);
-      if (taskGenerationSocketRef.current === socket) taskGenerationSocketRef.current = null;
-      if (taskGenerationRequestIdRef.current === requestId) taskGenerationRequestIdRef.current = null;
-    };
+    );
+    setActiveTaskGeneration(taskNodeId, { run, requestId });
+    taskGenerationRunRef.current = run;
+    taskGenerationRequestIdRef.current = requestId;
   };
 
   const handleStopTaskGeneration = () => {
     if (!selectedNodeId) return;
     const active = activeTaskGenerations.get(selectedNodeId);
-    const socket = active?.socket || taskGenerationSocketRef.current;
-    const requestId = active?.requestId || taskGenerationRequestIdRef.current;
-    if (socket?.readyState === WebSocket.OPEN && requestId) {
-      socket.send(JSON.stringify({ type: "generate_task_nodes_stop", requestId, nodeId: selectedNodeId }));
-    }
-    window.setTimeout(() => socket?.close(), 100);
-    if (socket) finishTaskGeneration(selectedNodeId, socket);
-    taskGenerationSocketRef.current = null;
+    const run = active?.run || taskGenerationRunRef.current;
+    run?.cancel();
+    if (run) finishTaskGeneration(selectedNodeId, run);
+    taskGenerationRunRef.current = null;
     taskGenerationRequestIdRef.current = null;
   };
 

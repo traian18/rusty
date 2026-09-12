@@ -63,7 +63,7 @@ import {
 // Capabilities
 import { executeNode } from "./capabilities/executeNode";
 import { stopPiAgentRun } from "./services/piAgentChat";
-import { globalExplore } from "./capabilities/globalExplore";
+import { globalExplore, stopGlobalExploration } from "./capabilities/globalExplore";
 import { reconciliateEdge } from "./capabilities/reconciliateEdge";
 import { reconciliateGraph } from "./capabilities/reconciliateGraph";
 import { agentChat, stopAgentChatDelegations } from "./capabilities/agentChat";
@@ -526,6 +526,13 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         safeSend(ws, { type: "execute_node_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "execute_node") {
         await executeNode(ws, data);
+      } else if (data.type === "global_explore_stop") {
+        // Unlike execute_node/agent_chat/inline_chat, global_explore's
+        // runToolLoop has no activePiRuns-backed cancellation of its own --
+        // shouldAbort only polls a real per-nodeId flag (see globalExplore.ts),
+        // which this sets.
+        const stopped = stopGlobalExploration(data.nodeId);
+        safeSend(ws, { type: "global_explore_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "global_explore") {
         await globalExplore(ws, data);
       } else if (data.type === "reconciliate_edge") {

@@ -115,8 +115,17 @@ export async function generateTaskNodes(ws: WebSocket, data: any): Promise<void>
       }
     }
   } catch (error: any) {
+    // generate_task_nodes_stopped is owned exclusively by server.ts's
+    // immediate ack to a generate_task_nodes_stop request ({requestId,
+    // nodeId, stopped}) -- this used to ALSO emit generate_task_nodes_stopped
+    // from here with a different shape ({requestId, nodeId, error}) once the
+    // aborted signal unwound into this catch block, so a client would
+    // receive two events sharing one type name but incompatible fields.
+    // Settling as generate_task_nodes_error uniformly (whether the cause was
+    // a real failure or a user-requested stop) mirrors how agent_chat/
+    // inline_chat already report a stopped run's own settlement.
     safeSend(ws, {
-      type: abortController.signal.aborted ? "generate_task_nodes_stopped" : "generate_task_nodes_error",
+      type: "generate_task_nodes_error",
       requestId,
       nodeId,
       error: abortController.signal.aborted ? "Task generation stopped." : error?.message || String(error),

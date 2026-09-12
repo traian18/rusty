@@ -1,0 +1,195 @@
+import { useWorkspaceStore } from "../../store";
+import { llmIntegrationService } from "../../services/llmIntegrationService";
+import type {
+  ClaudeCodeConnectionStatus,
+  CodexConnectionStatus,
+  CopilotConnectionStatus,
+} from "../../services/llmIntegrationService";
+import { createSemaphore } from "../../integrations/concurrency";
+import { isFastPollExpired, nextPollDelayMs, STALLED_LOGIN_MESSAGE } from "../../integrations/schedule";
+import type { ProviderStatus } from "../../store/types";
+
+/**
+ * Owns the out-of-React polling that populates the integration registry
+ * (REFACTOR_PLAN.md PR 3b) -- deliberately NOT under src/integrations/,
+ * the same reason startupSteps.ts sits next to AppBootstrapBoundary.tsx
+ * instead of under src/startup/: this module needs the real store and a
+ * real service (llmIntegrationService), and src/integrations/
+ * layering.test.ts forbids exactly those imports for the generic,
+ * pure-testable pieces (registryTypes.ts, schedule.ts, concurrency.ts).
+ *
+ * Replaces today's three useManagedProviderStatus hooks, each mounted only
+ * while LlmSetupTab is (its `keepAlive: "active-only"` policy unmounts and
+ * destroys all three on tab switch) -- this runs for the life of the
+ * session regardless of what tab is open, which is the entire point.
+ *
+ * Not started from here: startProviderCoordinator() is called once
+ * AppBootstrapBoundary's startup run settles (a later commit), never at
+ * this module's own import time -- providers don't exist meaningfully in
+ * the store until the secure-config step completes.
+ */
+
+const MANAGED_PROVIDER_IDS = ["github-copilot", "openai-codex", "anthropic-claude-code"] as const;
+type ManagedProviderId = (typeof MANAGED_PROVIDER_IDS)[number];
+
+type ManagedStatus = CopilotConnectionStatus | CodexConnectionStatus | ClaudeCodeConnectionStatus;
+
+const STATUS_LOADERS: Record<ManagedProviderId, () => Promise<ManagedStatus>> = {
+  "github-copilot": () => llmIntegrationService.getCopilotStatus(),
+  "openai-codex": () => llmIntegrationService.getCodexStatus(),
+  "anthropic-claude-code": () => llmIntegrationService.getClaudeCodeStatus(),
+};
+
+/**
+ * Bounds how many of the three managed-provider status checks run at once.
+ * Each one can be expensive on the sidecar side (Copilot: a full SDK client
+ * cold start with no server-side timeout of its own; Codex: a child-process
+ * spawn plus a 20s initialize; Claude Code: up to a 10s keychain read plus a
+ * 20s execFile) -- unbounded concurrency at every launch would mean all
+ * three paying their worst case simultaneously.
+ */
+const STATUS_CHECK_CONCURRENCY = 2;
+const statusCheckSemaphore = createSemaphore(STATUS_CHECK_CONCURRENCY);
+
+interface ManagedProviderRuntime {
+  timer?: ReturnType<typeof setTimeout>;
+  /** When the current unbroken "connecting" streak began. Lives here,
+      not in the store: it's scheduler bookkeeping schedule.ts's fast-poll
+      cap needs a wall-clock anchor for, not application state any
+      surface should read. */
+  connectingSinceMs?: number;
+}
+
+const runtime = new Map<ManagedProviderId, ManagedProviderRuntime>();
+
+/**
+ * Discards a response that arrives after a newer request for the same
+ * provider has already been issued -- the case that matters is a slow poll
+ * response landing after startManagedLogin (a later commit) or a manual
+ * refresh has already superseded it. A monotonic sequence number rather
+ * than comparing timestamps: no clock-resolution edge cases, and it works
+ * identically for a request that fails, times out, or races a stop().
+ */
+let requestSeq = 0;
+const latestRequestSeq = new Map<ManagedProviderId, number>();
+
+let started = false;
+
+function isSetupTabOpen(): boolean {
+  return useWorkspaceStore.getState().tabs.some((tab) => tab.type === "llm-setup");
+}
+
+/** CopilotConnectionStatus reports `login`; Codex/Claude Code report
+ * `email` -- accessed via a loose cast rather than an `in` narrowing on the
+ * union, which TS accepts either way but this is more obviously correct at
+ * a glance. */
+function accountLabel(status: ManagedStatus): string | undefined {
+  const asAny = status as { login?: string; email?: string };
+  return asAny.login || asAny.email || undefined;
+}
+
+/**
+ * Exported for direct unit testing -- the mapping from the sidecar's
+ * {state, authenticated, ...} shape to the registry's ProviderStatusKind is
+ * the one piece of this module worth pinning without going through the
+ * timer/network machinery around it.
+ */
+export function mapManagedStatus(status: ManagedStatus): ProviderStatus {
+  const checkedAt = new Date().toISOString();
+  const shared = {
+    checkedAt,
+    message: status.message,
+    diagnostics: status.diagnostics,
+  };
+  switch (status.state) {
+    case "connected":
+      return { ...shared, kind: "ready", account: accountLabel(status) };
+    case "connecting":
+      // Unauthenticated to start (no code yet), then filled in as the
+      // sidecar's own module-global login attempt progresses -- Copilot's
+      // device code specifically only ever arrives via a LATER poll
+      // (agent-sidecar/src/services/copilotService.ts), never the login
+      // response itself.
+      return { ...shared, kind: "loading", verificationUri: status.verificationUri, userCode: status.userCode };
+    case "disconnected":
+      return { ...shared, kind: "unauthenticated" };
+    case "failed":
+      return { ...shared, kind: "error" };
+  }
+}
+
+function applySettled(id: ManagedProviderId, status: ManagedStatus, mySeq: number): void {
+  if (latestRequestSeq.get(id) !== mySeq) return;
+  useWorkspaceStore.getState().patchProviderStatus(id, mapManagedStatus(status));
+}
+
+function applyError(id: ManagedProviderId, error: unknown, mySeq: number): void {
+  if (latestRequestSeq.get(id) !== mySeq) return;
+  useWorkspaceStore.getState().patchProviderStatus(id, {
+    kind: "error",
+    checkedAt: new Date().toISOString(),
+    message: error instanceof Error ? error.message : "Status check failed.",
+  });
+}
+
+async function checkProviderStatus(id: ManagedProviderId): Promise<void> {
+  const mySeq = ++requestSeq;
+  latestRequestSeq.set(id, mySeq);
+  try {
+    const status = await statusCheckSemaphore.run(() => STATUS_LOADERS[id]());
+    applySettled(id, status, mySeq);
+  } catch (error) {
+    applyError(id, error, mySeq);
+  }
+  scheduleNextPoll(id);
+}
+
+function scheduleNextPoll(id: ManagedProviderId): void {
+  if (!started) return;
+  const rt = runtime.get(id) ?? {};
+  runtime.set(id, rt);
+
+  const entry = useWorkspaceStore.getState().providerStatus[id];
+  const isConnecting = entry?.kind === "loading";
+  if (isConnecting) {
+    if (rt.connectingSinceMs === undefined) rt.connectingSinceMs = Date.now();
+  } else {
+    rt.connectingSinceMs = undefined;
+  }
+
+  const now = Date.now();
+  if (isConnecting && rt.connectingSinceMs !== undefined && isFastPollExpired(rt.connectingSinceMs, now)) {
+    useWorkspaceStore.getState().patchProviderStatus(id, { message: STALLED_LOGIN_MESSAGE });
+  }
+
+  const delay = nextPollDelayMs(
+    { isConnecting, connectingSinceMs: rt.connectingSinceMs, isSetupTabOpen: isSetupTabOpen() },
+    now,
+  );
+  rt.timer = setTimeout(() => void checkProviderStatus(id), delay);
+}
+
+/**
+ * Idempotent -- a second call while already started is a no-op, the same
+ * shape as beginRun()'s own activeRun guard in AppBootstrapBoundary.tsx.
+ */
+export function startProviderCoordinator(): void {
+  if (started) return;
+  started = true;
+  for (const id of MANAGED_PROVIDER_IDS) {
+    void checkProviderStatus(id);
+  }
+}
+
+/** Cancels every pending timer and resets all bookkeeping. Exported for
+ * tests, which need isolation between cases against this module's
+ * otherwise-persistent state -- there is no product-code caller of this
+ * today; the coordinator runs for the life of the session once started. */
+export function stopProviderCoordinator(): void {
+  started = false;
+  for (const rt of runtime.values()) {
+    if (rt.timer !== undefined) clearTimeout(rt.timer);
+  }
+  runtime.clear();
+  latestRequestSeq.clear();
+}

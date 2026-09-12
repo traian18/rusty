@@ -4,29 +4,14 @@ import { randomUUID } from "node:crypto";
 import fs from "fs";
 import path from "path";
 import { WebSocket } from "ws";
-import { AgentEnvelope, AGENT_PROTOCOL_VERSION, isRecord } from "../../../shared/agentProtocol";
+import { AgentEnvelope, AGENT_PROTOCOL_VERSION, isRecord, RpcError, RpcErrorCode } from "../../../shared/agent-protocol";
 import { harnessTelemetry } from "./observability";
 
-export type RpcErrorCode =
-  | "RPC_TIMEOUT"
-  | "RPC_DISCONNECTED"
-  | "RPC_WRONG_OWNER"
-  | "RPC_DUPLICATE_RESPONSE"
-  | "RPC_LATE_RESPONSE"
-  | "RPC_INVALID_PAYLOAD"
-  | "RPC_SEND_FAILED";
-
-export class RpcError extends Error {
-  constructor(
-    public readonly code: RpcErrorCode,
-    message: string,
-    public readonly requestId: string,
-    options?: { cause?: unknown },
-  ) {
-    super(message, options);
-    this.name = "RpcError";
-  }
-}
+// RpcErrorCode and RpcError now live in shared/agent-protocol (errors.ts /
+// rpc.ts) so both runtimes can share the shape; re-exported here so this
+// module's existing importers (e.g. websocket.test.ts) are unaffected.
+export type { RpcErrorCode };
+export { RpcError };
 
 export interface RpcRequestOptions<TResponse> {
   type: string;

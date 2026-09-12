@@ -6,7 +6,7 @@ import {
   parseAgentMessage,
   unwrapEnvelope,
   validateEnvelope,
-} from "../../../shared/agentProtocol";
+} from "../../../shared/agent-protocol";
 
 const validEnvelope = {
   protocolVersion: AGENT_PROTOCOL_VERSION,

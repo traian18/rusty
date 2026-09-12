@@ -49,7 +49,7 @@ import {
   negotiateProtocol,
   parseAgentMessage,
   unwrapEnvelope,
-} from "../../shared/agentProtocol";
+} from "../../shared/agent-protocol";
 
 // Services
 import { 

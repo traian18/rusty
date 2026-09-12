@@ -5,7 +5,7 @@ import {
   isRecord,
   parseAgentMessage,
   unwrapEnvelope,
-} from "../../shared/agentProtocol";
+} from "../../shared/agent-protocol";
 import { SIDECAR_WS_URL } from "../config/sidecar";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";

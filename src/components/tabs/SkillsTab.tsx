@@ -4,7 +4,8 @@ import { skillsService } from "../../services/skillsService";
 import { Cpu, Plus, Trash2, Save, Wand2, Plug } from "lucide-react";
 import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
+import { selectableProviderModels } from "../../store/providerHelpers";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT } from "../../config/sidecar";
 
@@ -32,7 +33,15 @@ export const SkillsTab: React.FC = () => {
   const [editingSkill, setEditingSkill] = useState<Partial<Skill> | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
-  const [genModel, setGenModel] = useState<string>("");
+  // Seeded from the global activeModel at mount (a lazy initializer, not a
+  // live subscription -- this field is meant to start from a reasonable
+  // default, not track activeModel afterward) rather than "" -- an
+  // unseeded "" meant providerHasModelReference(p, "") matched nothing,
+  // so "Generate with AI" silently sent customProvider: null for any user
+  // who never happened to touch this specific picker (REFACTOR_PLAN.md PR
+  // 3c, bundled with this file's resolver migration since the new
+  // blocking behavior would otherwise fire on this common case).
+  const [genModel, setGenModel] = useState<string>(() => useWorkspaceStore.getState().activeModel);
   const [genDescription, setGenDescription] = useState<string>("");
   const [showSavedModal, setShowSavedModal] = useState(false);
 
@@ -138,9 +147,20 @@ export const SkillsTab: React.FC = () => {
     setGenerateError(null);
 
     try {
-      const provider = customProviders.find((p) =>
-        providerHasModelReference(p, model)
-      );
+      // Was: customProviders.find(p => providerHasModelReference(p, model)),
+      // no fallback at all -- silently sent `null` whenever `model` didn't
+      // match anything (the common case before the genModel seeding fix
+      // below existed, since genModel defaulted to "" and was never seeded
+      // from activeModel). resolveExecutionProvider both fixes the missing
+      // fallback and gates on registry status (REFACTOR_PLAN.md PR 3c).
+      const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, model);
+      if (!resolution.ok) {
+        setGenerateError(resolution.message);
+        setIsGenerating(false);
+        notify("Cannot generate", resolution.message, "error");
+        return;
+      }
+      const provider = resolution.provider;
 
       try {
         wsRef.current = createAgentHarnessSocket();
@@ -162,7 +182,7 @@ export const SkillsTab: React.FC = () => {
           model,
           description,
           workspaceRoot: rootPath,
-          customProvider: provider || null,
+          customProvider: provider,
         }));
       };
 

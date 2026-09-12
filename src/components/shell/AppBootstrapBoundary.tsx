@@ -15,21 +15,26 @@ const PENDING_UI_DELAY_MS = 150;
 
 /**
  * Owns application bootstrap: hydrating UI preferences, seeding terminal
- * state, loading secure configuration, and (if a workspace was restored)
- * loading its skills.
+ * state, subscribing to live usage updates, loading secure configuration,
+ * and (if a workspace was restored) loading its skills.
  *
- * This is a shell around what PR 3's startup coordinator replaces. The
+ * This is a shell around what PR 3a's startup coordinator replaces. The
  * `ShellBootstrapStatus` here is intentionally the minimal three states;
- * PR 3 swaps this component's internals for a full `StartupPhase` machine
- * (sidecar health, bounded-concurrency model discovery, `degraded` mode)
- * WITHOUT changing `AppBootstrapBoundaryView`'s prop contract, so the rest of
- * the tree does not need to change again. `degraded` will map onto `ready`
- * plus a banner; the finer-grained phases map onto `pending` plus `message`.
+ * PR 3a swaps this component's internals for a full `StartupState` machine
+ * (sidecar health, per-step deadlines, `degraded` mode, Retry re-running
+ * only what didn't settle) WITHOUT changing `AppBootstrapBoundaryView`'s
+ * prop contract, so the rest of the tree does not need to change again.
+ * `degraded` will map onto `ready` plus a banner; the finer-grained phases
+ * map onto `pending` plus `message`.
  *
- * Explicitly NOT this PR's job: fixing the slice import-time I/O violations
- * in createIntegrationSlice/createMetricsSlice, moving main.tsx's pre-React
- * theme/typography apply, sidecar health checks, or LlmSetupTab's polling.
- * All recorded in ARCHITECTURE.md as PR 3's.
+ * The slice import-time I/O violations this component used to route around
+ * (createIntegrationSlice's theme/MCP reads, createPreferencesSlice's
+ * typography/shortcuts reads, createMetricsSlice's agentHarnessClient
+ * touch) are fixed as of PR 3a commits 3-5 -- hydrateUi/initTerminalState/
+ * initMetricsSubscription above are exactly that pattern, called explicitly
+ * here rather than at slice creation. Still explicitly NOT this component's
+ * job yet: sidecar health checks, per-step timeouts, and LlmSetupTab's
+ * polling (3b). All recorded in ARCHITECTURE.md.
  */
 export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [status, setStatus] = useState<ShellBootstrapStatus>("pending");
@@ -56,6 +61,7 @@ export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ 
     const store = useWorkspaceStore.getState();
     store.hydrateUi();
     store.initTerminalState(import.meta.env.DEV);
+    store.initMetricsSubscription();
 
     store.loadSecureConfig()
       .then(async () => {

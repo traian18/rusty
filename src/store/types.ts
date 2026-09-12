@@ -305,6 +305,10 @@ export interface WorkspaceState {
   metricsTimeframe: MetricsTimeframe;
   metricsLoading: boolean;
   metricsTodayTotal: number;
+  /** Subscribes to live usage_update events exactly once (idempotent).
+      Called from AppBootstrapBoundary, not at slice-creation time -- see
+      ARCHITECTURE.md's "slice import-time purity". */
+  initMetricsSubscription: () => void;
   loadMetricsSummary: () => Promise<void>;
   setMetricsTimeframe: (timeframe: MetricsTimeframe) => void;
   applyUsageUpdate: (runKey: string, cumulativeTotal: number) => void;

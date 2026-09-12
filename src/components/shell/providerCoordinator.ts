@@ -81,13 +81,18 @@ function isSetupTabOpen(): boolean {
   return useWorkspaceStore.getState().tabs.some((tab) => tab.type === "llm-setup");
 }
 
-/** CopilotConnectionStatus reports `login`; Codex/Claude Code report
- * `email` -- accessed via a loose cast rather than an `in` narrowing on the
- * union, which TS accepts either way but this is more obviously correct at
- * a glance. */
+/** CopilotConnectionStatus reports `login`/`host`; Codex/Claude Code report
+ * `email`/`planType` -- accessed via a loose cast rather than an `in`
+ * narrowing on the union, which TS accepts either way but this is more
+ * obviously correct at a glance. */
 function accountLabel(status: ManagedStatus): string | undefined {
   const asAny = status as { login?: string; email?: string };
   return asAny.login || asAny.email || undefined;
+}
+
+function providerDetails(status: ManagedStatus): { host?: string; planType?: string } {
+  const asAny = status as { host?: string; planType?: string };
+  return { host: asAny.host, planType: asAny.planType };
 }
 
 /**
@@ -105,7 +110,7 @@ export function mapManagedStatus(status: ManagedStatus): ProviderStatus {
   };
   switch (status.state) {
     case "connected":
-      return { ...shared, kind: "ready", account: accountLabel(status) };
+      return { ...shared, kind: "ready", account: accountLabel(status), ...providerDetails(status) };
     case "connecting":
       // Unauthenticated to start (no code yet), then filled in as the
       // sidecar's own module-global login attempt progresses -- Copilot's
@@ -174,6 +179,67 @@ function scheduleNextPoll(id: ManagedProviderId): void {
     now,
   );
   rt.timer = setTimeout(() => void checkProviderStatus(id), delay);
+}
+
+function isManagedProviderId(id: string): id is ManagedProviderId {
+  return (MANAGED_PROVIDER_IDS as readonly string[]).includes(id);
+}
+
+/** Cancels a provider's pending poll timer (if any) and re-checks it right
+ * away -- used after login/logout so the fresh result is visible
+ * immediately, rather than waiting for whatever poll was already
+ * scheduled (which could be minutes away at the background cadence). */
+function forcePollNow(id: ManagedProviderId): void {
+  const rt = runtime.get(id);
+  if (rt?.timer !== undefined) clearTimeout(rt.timer);
+  void checkProviderStatus(id);
+}
+
+const LOGIN_LOADERS: Record<ManagedProviderId, () => Promise<ManagedStatus>> = {
+  "github-copilot": () => llmIntegrationService.startCopilotLogin(),
+  "openai-codex": () => llmIntegrationService.startCodexLogin(),
+  "anthropic-claude-code": () => llmIntegrationService.startClaudeCodeLogin(),
+};
+const LOGOUT_LOADERS: Record<ManagedProviderId, () => Promise<ManagedStatus>> = {
+  "github-copilot": () => llmIntegrationService.logoutCopilot(),
+  "openai-codex": () => llmIntegrationService.logoutCodex(),
+  "anthropic-claude-code": () => llmIntegrationService.logoutClaudeCode(),
+};
+
+/**
+ * Starts a managed-auth device-code login (REFACTOR_PLAN.md PR 3b commit
+ * 9), replacing LlmSetupTab's own direct llmIntegrationService calls +
+ * per-hook setStatus. Writes the registry through the same path a poll
+ * would (forcePollNow -> checkProviderStatus -> applySettled), so the
+ * fast-poll cadence and the sequence-number stale-response guard both
+ * apply uniformly -- login is just another reason a status can change,
+ * not a separate write path. Rethrows so the component can still show its
+ * own error toast, matching today's UX.
+ */
+export async function startManagedLogin(provider: CustomProvider): Promise<void> {
+  const id = provider.id;
+  if (!isManagedProviderId(id)) return;
+  try {
+    await LOGIN_LOADERS[id]();
+  } catch (error) {
+    useWorkspaceStore.getState().patchProviderStatus(id, {
+      kind: "error",
+      checkedAt: new Date().toISOString(),
+      message: error instanceof Error ? error.message : `Could not start ${id} authorization.`,
+    });
+    throw error;
+  }
+  forcePollNow(id);
+}
+
+/** Mirrors startManagedLogin's shape. Leaves status untouched on failure,
+ * matching today's handleManagedLogout (which only ever updates status on
+ * success). */
+export async function logoutManaged(provider: CustomProvider): Promise<void> {
+  const id = provider.id;
+  if (!isManagedProviderId(id)) return;
+  await LOGOUT_LOADERS[id]();
+  forcePollNow(id);
 }
 
 /**

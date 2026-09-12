@@ -40,6 +40,10 @@ export interface ProviderStatusEntry<TQuota> {
   userCode?: string;
   diagnostics?: string[];
   account?: string;
+  /** Copilot only -- the GitHub host (e.g. "https://github.com"). */
+  host?: string;
+  /** Codex/Claude Code only -- the plan name reported by the sidecar. */
+  planType?: string;
 
   // Quota, folded in here rather than kept in a parallel cache
   // (ProviderQuotaControl's local state today).

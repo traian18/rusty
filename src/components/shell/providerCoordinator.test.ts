@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspaceStore } from "../../store";
 import { llmIntegrationService } from "../../services/llmIntegrationService";
 import {
+  logoutManaged,
   mapManagedStatus,
   refreshProviderQuota,
   setQuotaWatch,
+  startManagedLogin,
   startProviderCoordinator,
   stopProviderCoordinator,
 } from "./providerCoordinator";
@@ -23,6 +25,12 @@ vi.mock("../../services/llmIntegrationService", () => ({
     getClaudeCodeStatus: vi.fn(),
     discoverModels: vi.fn(),
     getQuota: vi.fn(),
+    startCopilotLogin: vi.fn(),
+    startCodexLogin: vi.fn(),
+    startClaudeCodeLogin: vi.fn(),
+    logoutCopilot: vi.fn(),
+    logoutCodex: vi.fn(),
+    logoutClaudeCode: vi.fn(),
   },
 }));
 
@@ -142,6 +150,12 @@ describe("providerCoordinator", () => {
     vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockReset();
     vi.mocked(llmIntegrationService.discoverModels).mockReset().mockResolvedValue([]);
     vi.mocked(llmIntegrationService.getQuota).mockReset();
+    vi.mocked(llmIntegrationService.startCopilotLogin).mockReset();
+    vi.mocked(llmIntegrationService.startCodexLogin).mockReset();
+    vi.mocked(llmIntegrationService.startClaudeCodeLogin).mockReset();
+    vi.mocked(llmIntegrationService.logoutCopilot).mockReset();
+    vi.mocked(llmIntegrationService.logoutCodex).mockReset();
+    vi.mocked(llmIntegrationService.logoutClaudeCode).mockReset();
     vi.useFakeTimers();
   });
 
@@ -525,6 +539,82 @@ describe("providerCoordinator", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(useWorkspaceStore.getState().providerStatus["regular-with-key"]?.quota?.source).toBe("second");
+    });
+  });
+
+  describe("startManagedLogin / logoutManaged", () => {
+    it("starts a login and re-checks status immediately, surfacing the fresh result", async () => {
+      vi.mocked(llmIntegrationService.startCopilotLogin).mockResolvedValue({
+        state: "connecting",
+        authenticated: false,
+        verificationUri: "https://github.com/login/device",
+      });
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({
+        state: "connecting",
+        authenticated: false,
+        verificationUri: "https://github.com/login/device",
+        userCode: "ABCD-1234",
+      });
+
+      await startManagedLogin(MANAGED_PROVIDER_FIXTURE as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.startCopilotLogin).toHaveBeenCalledTimes(1);
+      expect(llmIntegrationService.getCopilotStatus).toHaveBeenCalledTimes(1);
+      expect(useWorkspaceStore.getState().providerStatus["github-copilot"]).toMatchObject({
+        kind: "loading",
+        userCode: "ABCD-1234",
+      });
+    });
+
+    it("records an error status and rethrows when the login call itself fails", async () => {
+      vi.mocked(llmIntegrationService.startCopilotLogin).mockRejectedValue(new Error("network down"));
+
+      await expect(startManagedLogin(MANAGED_PROVIDER_FIXTURE as any)).rejects.toThrow("network down");
+
+      expect(useWorkspaceStore.getState().providerStatus["github-copilot"]).toMatchObject({
+        kind: "error",
+        message: "network down",
+      });
+      // No status re-check on a failed login -- there's nothing fresh to
+      // confirm.
+      expect(llmIntegrationService.getCopilotStatus).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op for a non-managed provider id", async () => {
+      await startManagedLogin(REGULAR_PROVIDER_WITH_KEY as any);
+      expect(llmIntegrationService.startCopilotLogin).not.toHaveBeenCalled();
+      expect(llmIntegrationService.startCodexLogin).not.toHaveBeenCalled();
+    });
+
+    it("logs out and re-checks status immediately", async () => {
+      vi.mocked(llmIntegrationService.logoutCopilot).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+
+      await logoutManaged(MANAGED_PROVIDER_FIXTURE as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.logoutCopilot).toHaveBeenCalledTimes(1);
+      expect(llmIntegrationService.getCopilotStatus).toHaveBeenCalledTimes(1);
+      expect(useWorkspaceStore.getState().providerStatus["github-copilot"]?.kind).toBe("unauthenticated");
+    });
+
+    it("a login supersedes whatever poll timer was already scheduled -- it doesn't wait for it", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+      // First poll settled "disconnected" -> background cadence (minutes
+      // away). Without forcePollNow, a login here would sit unconfirmed
+      // until that far-off timer fires.
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockClear();
+      vi.mocked(llmIntegrationService.startCopilotLogin).mockResolvedValue({ state: "connecting", authenticated: false });
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "connecting", authenticated: false });
+
+      await startManagedLogin(MANAGED_PROVIDER_FIXTURE as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.getCopilotStatus).toHaveBeenCalledTimes(1);
+      expect(useWorkspaceStore.getState().providerStatus["github-copilot"]?.kind).toBe("loading");
     });
   });
 });

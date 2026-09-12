@@ -3,6 +3,7 @@ import { AppBootstrapBoundary } from "./components/shell/AppBootstrapBoundary";
 import { AppShell } from "./components/shell/AppShell";
 import { DevLogBridge } from "./components/shell/DevLogBridge";
 import { GlobalShortcuts } from "./components/shell/GlobalShortcuts";
+import { StartupDegradedBanner } from "./components/shell/StartupDegradedBanner";
 import styles from "./App.module.css";
 
 function App() {
@@ -13,6 +14,7 @@ function App() {
 
       <AppBootstrapBoundary>
         <AppShell />
+        <StartupDegradedBanner />
       </AppBootstrapBoundary>
 
       {/* Stays outside the boundary so a notify() during bootstrap still

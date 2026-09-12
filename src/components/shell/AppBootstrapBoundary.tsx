@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useWorkspaceStore } from "../../store";
 import { runStartup } from "../../startup/runStartup";
 import { startupStateFromResult } from "../../startup/types";
-import type { StartupResult, StartupState } from "../../startup/types";
+import { buildRetryStepList } from "../../startup/buildRetryStepList";
+import type { StartupResult, StartupState, StartupStep, StepOutcome } from "../../startup/types";
 import { STARTUP_STEPS } from "./startupSteps";
 import { AppBootstrapBoundaryView } from "./AppBootstrapBoundary.view";
 
@@ -37,25 +38,28 @@ const GLOBAL_DEADLINE_MS = 8_000;
  */
 let activeRun: Promise<StartupResult> | undefined;
 let activeAbortController: AbortController | undefined;
+/** The most recently completed run's per-step outcomes, for Retry to
+    consult -- see buildRetryStepList. Empty until the first run settles. */
+let lastOutcomes: StepOutcome[] = [];
 
-function beginRun(): Promise<StartupResult> {
+function beginRun(steps: readonly StartupStep[]): Promise<StartupResult> {
   if (activeRun) return activeRun;
 
   activeAbortController = new AbortController();
   const controller = activeAbortController;
 
-  const firstStep = STARTUP_STEPS[0];
+  const firstStep = steps[0];
   if (firstStep) {
     useWorkspaceStore.getState().setStartupState({
       status: "running",
       stepId: firstStep.id,
       message: firstStep.label,
       done: 0,
-      total: STARTUP_STEPS.length,
+      total: steps.length,
     });
   }
 
-  activeRun = runStartup(STARTUP_STEPS, {
+  activeRun = runStartup(steps, {
     globalDeadlineMs: GLOBAL_DEADLINE_MS,
     signal: controller.signal,
     onStepSettled: (outcome, index, total) => {
@@ -67,7 +71,7 @@ function beginRun(): Promise<StartupResult> {
       // it's never actually going to reach (and likewise a skipped
       // dependent step has no business being shown as "running" either).
       if (outcome.status !== "ok") return;
-      const next = STARTUP_STEPS[index + 1];
+      const next = steps[index + 1];
       if (!next) return;
       useWorkspaceStore.getState().setStartupState({
         status: "running",
@@ -79,6 +83,7 @@ function beginRun(): Promise<StartupResult> {
     },
   })
     .then((result) => {
+      lastOutcomes = result.outcomes;
       useWorkspaceStore.getState().setStartupState(startupStateFromResult(result));
       return result;
     })
@@ -91,16 +96,22 @@ function beginRun(): Promise<StartupResult> {
 }
 
 /**
- * Discards any in-flight run's bookkeeping and starts a fresh one -- for
- * now, Retry always means a full re-run of every step. Commit 12 pins
- * today's full-rerun behavior with a characterization test first, then
- * changes it to re-run only the non-"ok" sub-DAG.
+ * Discards any in-flight run's bookkeeping and starts a fresh one, re-
+ * running only the sub-DAG rooted at whatever didn't settle "ok" last time
+ * (buildRetryStepList) -- a step that already succeeded is replaced with a
+ * no-op rather than genuinely re-invoked, and anything that transitively
+ * depended on a step actually being retried gets re-evaluated naturally by
+ * runStartup's own dependsOn check. With today's three-step registry
+ * (secure-config both critical and first), a critical failure means
+ * nothing downstream ever ran, so this is currently indistinguishable from
+ * a full re-run -- the distinction starts mattering once 3b adds steps
+ * that can fail independently of ones that already succeeded.
  */
 function retryStartup(): void {
   activeAbortController?.abort();
   activeRun = undefined;
   activeAbortController = undefined;
-  void beginRun();
+  void beginRun(buildRetryStepList(STARTUP_STEPS, lastOutcomes));
 }
 
 function abortActiveRun(): void {
@@ -138,7 +149,7 @@ export const AppBootstrapBoundary: React.FC<{ children: React.ReactNode }> = ({ 
       CONTINUE_WITHOUT_WAITING_DELAY_MS,
     );
 
-    void beginRun();
+    void beginRun(STARTUP_STEPS);
 
     return () => {
       clearTimeout(pendingTimer);

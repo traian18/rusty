@@ -11,6 +11,7 @@ import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences
 import type { DrawerView } from "../preferences/shellLayout";
 import type { OpenTabRequest, TabInstance } from "../tabs/types";
 import type { StartupState } from "../startup/types";
+import type { ProviderId, ProviderStatusEntry } from "../integrations/registryTypes";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -82,6 +83,15 @@ export interface ProviderQuotaSnapshot {
   message?: string;
   manageUrl?: string;
 }
+
+/**
+ * The integration registry's per-provider entry (REFACTOR_PLAN.md PR 3b).
+ * Binds the generic ProviderStatusEntry (src/integrations/registryTypes.ts,
+ * which cannot import this file -- see its own layering.test.ts) to this
+ * app's concrete quota snapshot type, the same direction this file already
+ * imports StartupState from ../startup/types.
+ */
+export type ProviderStatus = ProviderStatusEntry<ProviderQuotaSnapshot>;
 
 export interface GeneratedTaskNodeSpec {
   key?: string;
@@ -269,6 +279,15 @@ export interface WorkspaceState {
   customProviders: CustomProvider[];
   activeCustomProviderId: string | null;
   activeModel: string;
+  /** The integration registry (REFACTOR_PLAN.md PR 3b): one global source
+      of provider auth/model/quota status, keyed by provider id. Absent
+      entries read as {kind: "unknown"} via providerStatusOrUnknown
+      (src/integrations/registryTypes.ts) -- no consumers yet as of the
+      slice's own commit; the coordinator that populates it lands in a
+      later commit. */
+  providerStatus: Record<ProviderId, ProviderStatus>;
+  setProviderStatus: (id: ProviderId, entry: ProviderStatus) => void;
+  patchProviderStatus: (id: ProviderId, patch: Partial<ProviderStatus>) => void;
   gitStatus: GitStatusResult | null;
   lastRename: { originalPath: string; newPath: string } | null;
   setLastRename: (rename: { originalPath: string; newPath: string } | null) => void;

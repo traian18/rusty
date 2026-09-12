@@ -5,7 +5,7 @@ import { DEFAULT_SKILL_ID } from "../../../config/skillDefinitions";
 import { Chat } from "../../ui/Chat";
 import { AgentQuestion, ChatInput } from "../../ui/ChatInput";
 import type { SubagentActivity } from "../../ui/Chat";
-import { selectableProviderModels } from "../../../store/providerHelpers";
+import { useSelectableModels } from "../../../hooks/useSelectableModels";
 
 interface PromptChatContentProps {
   selectedNode: any;
@@ -28,14 +28,19 @@ const ModelSelector: React.FC<{ nodeId: string; nodeData: any }> = ({ nodeId, no
   const activeProviderId = useWorkspaceStore((s) => s.activeCustomProviderId);
   const providerStatus = useWorkspaceStore((s) => s.providerStatus);
   const updateTaskNode = useWorkspaceStore((s) => s.updateTaskNode);
-  const modelOptions = selectableProviderModels(providers, providerStatus, activeProviderId)
-    .map(({ model }) => ({ id: model.id, name: model.name }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    providers,
+    providerStatus,
+    activeProviderId,
+  );
   return (
     <CustomSelect
       value={nodeData.model || activeModel}
       onChange={(val) => updateTaskNode(nodeId, { model: val })}
       options={modelOptions}
-      placeholder="Model"
+      placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+        ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+        : "Model"}
       className="w-28 text-[10px]"
       direction="up"
     />

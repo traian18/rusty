@@ -438,8 +438,8 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 - [x] Task generation. (`taskGenerationService.ts`; also fixed the `generate_task_nodes_stopped` dual-shape bug)
 - [ ] Skill generation.
 - [x] Edge reconciliation. (`edgeReconciliationService.ts`; gained real cancellation via a new `reconciliate_edge_stop`, and command-permission requests are now wired at all, previously silently dropped)
-- [ ] Graph reconciliation.
-- [ ] Test and build execution.
+- [x] Graph reconciliation. (`graphReconciliationService.ts`; drops the `__reconciliation__:` prefix hack; gained real cancellation via a new `reconciliate_graph_stop`, and command-permission requests are now wired at all)
+- [x] Test and build execution. (`testBuildService.ts`; drops the `__test_build__:` prefix hack; the existing stop button now sends a real `test_build_stop` that kills the actual build subprocess, instead of only closing the client socket)
 - [ ] Inline chat.
 - [ ] Command permission handling.
 

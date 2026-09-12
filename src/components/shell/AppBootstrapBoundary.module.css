@@ -22,6 +22,11 @@
   font-size: var(--font-size-ui-md);
 }
 
+.progress {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
 .failedHeading {
   margin: 0;
   color: var(--color-status-danger);

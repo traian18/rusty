@@ -14,8 +14,17 @@ interface AppBootstrapBoundaryViewProps {
   /** Delay-gated: only true once bootstrap has been pending long enough to
       justify showing anything, so a fast/warm boot never flashes a screen. */
   showPendingUi: boolean;
-  /** PR 3 fills this with the current StartupPhase's label. */
+  /** The current step's label (REFACTOR_PLAN.md PR 3a) -- was accepted but
+      never populated before this commit. */
   message?: string;
+  /** How many of the total steps have settled, for the "(done/total)"
+      progress readout -- present only alongside `message`. */
+  done?: number;
+  total?: number;
+  /** True once the pending screen has been visible long enough (2.5s) to
+      offer an escape hatch from a slow or stuck run. Only meaningful
+      while `status === "pending"`. */
+  showContinueWithoutWaiting: boolean;
   error?: unknown;
   onRetry: () => void;
   onContinue: () => void;
@@ -26,6 +35,9 @@ export const AppBootstrapBoundaryView: React.FC<AppBootstrapBoundaryViewProps> =
   status,
   showPendingUi,
   message,
+  done,
+  total,
+  showContinueWithoutWaiting,
   error,
   onRetry,
   onContinue,
@@ -65,7 +77,15 @@ export const AppBootstrapBoundaryView: React.FC<AppBootstrapBoundaryViewProps> =
     <div className={styles.screen} role="status" aria-live="polite">
       <div className={styles.card}>
         <RustyIcon size={40} />
-        <p className={styles.message}>{message || "Starting Rusty…"}</p>
+        <p className={styles.message}>
+          {message || "Starting Rusty…"}
+          {done !== undefined && total !== undefined && (
+            <span className={styles.progress}> ({done}/{total})</span>
+          )}
+        </p>
+        {showContinueWithoutWaiting && (
+          <Button variant="ghost" onClick={onContinue}>Continue without waiting</Button>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,27 @@
 import type { CustomProvider, ProviderModel, ReasoningEffort } from "./types";
 
 const REASONING_VARIANT_SEPARATOR = "::reasoning=";
+
+/**
+ * The managed-auth provider predicates (REFACTOR_PLAN.md PR 3b commit 10)
+ * -- previously duplicated verbatim in both LlmSetupTab.tsx and
+ * ProviderList.tsx. One copy here, imported by both.
+ */
+export function isCopilotProvider(provider: CustomProvider): boolean {
+  return provider.transport === "github-copilot-sdk" || provider.id === "github-copilot";
+}
+
+export function isCodexProvider(provider: CustomProvider): boolean {
+  return provider.transport === "openai-codex-app-server" || provider.id === "openai-codex";
+}
+
+export function isClaudeCodeProvider(provider: CustomProvider): boolean {
+  return provider.transport === "anthropic-claude-agent-sdk" || provider.id === "anthropic-claude-code";
+}
+
+export function isManagedAuthProvider(provider: CustomProvider): boolean {
+  return isCopilotProvider(provider) || isCodexProvider(provider) || isClaudeCodeProvider(provider);
+}
 const REASONING_EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const REASONING_EFFORT_LABELS: Record<(typeof REASONING_EFFORT_ORDER)[number], string> = {
   minimal: "Minimal",

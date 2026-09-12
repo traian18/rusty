@@ -5,7 +5,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
 import { llmIntegrationService } from "../../services/llmIntegrationService";
-import { providerModelVariants } from "../../store/providerHelpers";
+import {
+  isClaudeCodeProvider,
+  isCodexProvider,
+  isCopilotProvider,
+  isManagedAuthProvider as isManagedAuthProviderPredicate,
+  providerModelVariants,
+} from "../../store/providerHelpers";
 import { providerStatusOrUnknown } from "../../integrations/registryTypes";
 import { logoutManaged, startManagedLogin } from "../shell/providerCoordinator";
 import { ProviderList, selectFirstSupportedModel } from "./llmSetup/ProviderList";
@@ -24,31 +30,6 @@ const AUTH_TYPE_OPTIONS = [
   { id: "anthropic", name: "Anthropic x-api-key" },
 ];
 
-/**
- * Fits a registry ProviderStatus entry into ProviderList's existing
- * {state, authenticated, login, email, ...} prop shape (REFACTOR_PLAN.md
- * PR 3b commit 9). Temporary -- ProviderList itself starts reading
- * providerStatus directly in commit 10, at which point this and the three
- * per-row props it feeds are deleted.
- */
-function toLegacyManagedStatus(entry: ReturnType<typeof providerStatusOrUnknown>) {
-  return {
-    state: entry.kind === "ready" ? "connected" as const
-      : entry.kind === "loading" ? "connecting" as const
-      : entry.kind === "error" ? "failed" as const
-      : "disconnected" as const,
-    authenticated: entry.kind === "ready",
-    message: entry.message,
-    verificationUri: entry.verificationUri,
-    userCode: entry.userCode,
-    diagnostics: entry.diagnostics,
-    login: entry.account,
-    email: entry.account,
-    host: entry.host,
-    planType: entry.planType,
-  };
-}
-
 export const LlmSetupTab: React.FC = () => {
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
@@ -59,12 +40,15 @@ export const LlmSetupTab: React.FC = () => {
   const addCustomProvider = useWorkspaceStore((state) => state.addCustomProvider);
   const providerStatus = useWorkspaceStore((state) => state.providerStatus);
 
-  // Selected provider configuration state
+  // Selected provider configuration state. The managed-provider predicates
+  // used to be duplicated verbatim here and in ProviderList.tsx -- both now
+  // import the one copy in store/providerHelpers.ts (REFACTOR_PLAN.md PR
+  // 3b commit 10).
   const selectedProvider = customProviders.find((p) => p.id === activeCustomProviderId);
-  const isCopilot = selectedProvider?.transport === "github-copilot-sdk" || selectedProvider?.id === "github-copilot";
-  const isCodex = selectedProvider?.transport === "openai-codex-app-server" || selectedProvider?.id === "openai-codex";
-  const isClaudeCode = selectedProvider?.transport === "anthropic-claude-agent-sdk" || selectedProvider?.id === "anthropic-claude-code";
-  const isManagedAuthProvider = isCopilot || isCodex || isClaudeCode;
+  const isCopilot = Boolean(selectedProvider && isCopilotProvider(selectedProvider));
+  const isCodex = Boolean(selectedProvider && isCodexProvider(selectedProvider));
+  const isClaudeCode = Boolean(selectedProvider && isClaudeCodeProvider(selectedProvider));
+  const isManagedAuthProvider = Boolean(selectedProvider && isManagedAuthProviderPredicate(selectedProvider));
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [catalogUrl, setCatalogUrl] = useState("");
@@ -82,16 +66,15 @@ export const LlmSetupTab: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<Record<string, "connected" | "failed">>({});
   const [signingOut, setSigningOut] = useState(false);
 
-  // One unified entry per managed provider, straight from the registry
+  // The selected managed provider's entry, straight from the registry
   // (REFACTOR_PLAN.md PR 3b commit 9) -- replaces three separate
   // useManagedProviderStatus polls, each mounted only while this tab was,
   // and each destroyed the moment the user switched tabs. The coordinator
   // (providerCoordinator.ts) now polls all three for the life of the
   // session, so this tab reads whatever it's already settled to instead
-  // of restarting a poll from scratch every time it mounts.
-  const copilotStatus = providerStatusOrUnknown(providerStatus, "github-copilot");
-  const codexStatus = providerStatusOrUnknown(providerStatus, "openai-codex");
-  const claudeCodeStatus = providerStatusOrUnknown(providerStatus, "anthropic-claude-code");
+  // of restarting a poll from scratch every time it mounts. ProviderList
+  // reads the whole registry itself now (commit 10), so this tab no longer
+  // needs its own per-vendor copies.
   const managedStatus = selectedProvider ? providerStatusOrUnknown(providerStatus, selectedProvider.id) : undefined;
   const managedVendor = isCodex ? "OpenAI" : isClaudeCode ? "Anthropic" : "GitHub";
   const managedProduct = isCodex ? "Codex" : isClaudeCode ? "Claude Code" : "Copilot";
@@ -353,9 +336,7 @@ export const LlmSetupTab: React.FC = () => {
             providers={customProviders}
             activeProviderId={activeCustomProviderId}
             connectionStatuses={connectionStatus}
-            copilotStatus={toLegacyManagedStatus(copilotStatus)}
-            codexStatus={toLegacyManagedStatus(codexStatus)}
-            claudeCodeStatus={toLegacyManagedStatus(claudeCodeStatus)}
+            providerStatus={providerStatus}
             onSelectProvider={(provider) => {
               setActiveCustomProviderId(provider.id);
               const modelId = selectFirstSupportedModel(provider);

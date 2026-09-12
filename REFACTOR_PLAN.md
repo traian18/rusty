@@ -432,7 +432,7 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 
 ### Consumer migration checklist
 
-- [ ] Canvas node execution.
+- [x] Canvas node execution. (`nodeExecutionService.ts`; also gained real server-side cancellation via a new `execute_node_stop`, which did not exist before)
 - [ ] Agent tab.
 - [ ] Global and explorer chat.
 - [ ] Task generation.

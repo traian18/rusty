@@ -221,6 +221,7 @@ export const SidePane: React.FC<SidePaneProps> = ({
         }
         taskGenerationModel={explorer.taskGenerationModel}
         taskGenerationModels={explorer.allAvailableModels}
+        taskGenerationUnauthenticatedProviders={explorer.unauthenticatedProviders}
         onTaskGenerationModelChange={handleTaskGenerationModelChange}
       />
 
@@ -420,6 +421,7 @@ function buildGlobalChatContent(
       exploreModel={explorer.exploreModel}
       summarizeModel={explorer.summarizeModel}
       allAvailableModels={explorer.allAvailableModels}
+      unauthenticatedProviders={explorer.unauthenticatedProviders}
       subagents={explorer.subagents}
       agentQuestion={explorer.agentQuestion}
       handleAgentQuestionAnswer={explorer.handleAgentQuestionAnswer}

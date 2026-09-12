@@ -16,6 +16,7 @@ import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
 import { invoke } from "@tauri-apps/api/core";
 import { providerModelVariants, selectableModelProviders } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
 import { SIDECAR_PORT, SIDECAR_WS_URL } from "../../config/sidecar";
@@ -173,14 +174,10 @@ export const useExplorerWebSocket = (selectedNode: any) => {
   const availableModels = activeProvider
     ? activeProvider.models.filter((model) => model.supported !== false).flatMap(providerModelVariants)
     : [];
-  const allAvailableModels = filteredProviders.flatMap((prov) =>
-    prov.models
-      .filter((model) => model.supported !== false)
-      .flatMap(providerModelVariants)
-      .map((model) => ({
-        id: model.id,
-        name: `${prov.name} / ${model.name}`,
-      }))
+  const { options: allAvailableModels, unauthenticatedProviders } = useSelectableModels(
+    providers,
+    providerStatus,
+    activeCustomProviderId,
   );
 
   const exploreModel = (selectedNode?.data?.exploreModel as string) || activeModel;
@@ -1093,6 +1090,7 @@ export const useExplorerWebSocket = (selectedNode: any) => {
     providers: filteredProviders,
     activeCustomProviderId,
     availableModels,
-    allAvailableModels
+    allAvailableModels,
+    unauthenticatedProviders
   };
 };

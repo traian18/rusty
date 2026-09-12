@@ -40,6 +40,14 @@ export function isEligibleForDiscovery(input: DiscoveryEligibilityInput): boolea
   return input.authType === "none" || input.hasApiKey;
 }
 
+/**
+ * Quota gating uses the exact same rule -- a provider actually usable at
+ * all is a provider worth checking quota for. Named separately so a call
+ * site (providerCoordinator.ts's quota watch) reads as what it's deciding,
+ * not as a discovery decision it happens to share logic with.
+ */
+export const isEligibleForQuota = isEligibleForDiscovery;
+
 export interface StalenessInput {
   modelsFetchedAt?: string;
 }

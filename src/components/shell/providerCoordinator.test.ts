@@ -3,6 +3,8 @@ import { useWorkspaceStore } from "../../store";
 import { llmIntegrationService } from "../../services/llmIntegrationService";
 import {
   mapManagedStatus,
+  refreshProviderQuota,
+  setQuotaWatch,
   startProviderCoordinator,
   stopProviderCoordinator,
 } from "./providerCoordinator";
@@ -20,6 +22,7 @@ vi.mock("../../services/llmIntegrationService", () => ({
     getCodexStatus: vi.fn(),
     getClaudeCodeStatus: vi.fn(),
     discoverModels: vi.fn(),
+    getQuota: vi.fn(),
   },
 }));
 
@@ -138,11 +141,13 @@ describe("providerCoordinator", () => {
     vi.mocked(llmIntegrationService.getCodexStatus).mockReset();
     vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockReset();
     vi.mocked(llmIntegrationService.discoverModels).mockReset().mockResolvedValue([]);
+    vi.mocked(llmIntegrationService.getQuota).mockReset();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     stopProviderCoordinator();
+    setQuotaWatch(null);
     vi.useRealTimers();
   });
 
@@ -403,6 +408,123 @@ describe("providerCoordinator", () => {
       // (regular-with-key, and github-copilot once ready) -- concurrency
       // is bounded at DISCOVERY_CONCURRENCY (2).
       expect(maxObserved).toBeLessThanOrEqual(2);
+    });
+  });
+
+  describe("quota watch", () => {
+    const quotaSnapshot = {
+      providerId: "regular-with-key",
+      providerName: "Regular (API key)",
+      state: "available" as const,
+      source: "test",
+      fetchedAt: "2026-09-12T00:00:00.000Z",
+      windows: [],
+    };
+
+    it("fetches quota immediately when a provider starts being watched", async () => {
+      vi.mocked(llmIntegrationService.getQuota).mockResolvedValue(quotaSnapshot);
+
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(1);
+      expect(useWorkspaceStore.getState().providerStatus["regular-with-key"]).toMatchObject({
+        quota: quotaSnapshot,
+        quotaLoading: false,
+      });
+    });
+
+    it("re-fetches at the 5-minute interval while still watched", async () => {
+      vi.mocked(llmIntegrationService.getQuota).mockResolvedValue(quotaSnapshot);
+
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 - 1);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(2);
+    });
+
+    it("switching the watched provider cancels the previous one's timer", async () => {
+      vi.mocked(llmIntegrationService.getQuota).mockResolvedValue(quotaSnapshot);
+
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      setQuotaWatch(REGULAR_PROVIDER_NO_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.mocked(llmIntegrationService.getQuota).mockClear();
+
+      // If the first provider's timer were still alive, this would fire an
+      // extra call for it.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(1);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "regular-no-key" }),
+      );
+    });
+
+    it("passing null stops watching entirely", async () => {
+      vi.mocked(llmIntegrationService.getQuota).mockResolvedValue(quotaSnapshot);
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      setQuotaWatch(null);
+      vi.mocked(llmIntegrationService.getQuota).mockClear();
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+      expect(llmIntegrationService.getQuota).not.toHaveBeenCalled();
+    });
+
+    it("records a quota error without clobbering existing status fields", async () => {
+      useWorkspaceStore.getState().setProviderStatus("regular-with-key", { kind: "unknown", account: "keep-me" });
+      vi.mocked(llmIntegrationService.getQuota).mockRejectedValue(new Error("quota endpoint down"));
+
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(useWorkspaceStore.getState().providerStatus["regular-with-key"]).toMatchObject({
+        account: "keep-me",
+        quotaError: "quota endpoint down",
+        quotaLoading: false,
+      });
+    });
+
+    it("refreshProviderQuota fetches once without disturbing the watch timer's own cadence", async () => {
+      vi.mocked(llmIntegrationService.getQuota).mockResolvedValue(quotaSnapshot);
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.mocked(llmIntegrationService.getQuota).mockClear();
+
+      refreshProviderQuota(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(1);
+
+      // The watch's own timer, started before the manual refresh, still
+      // fires on its original schedule -- matching today's handleRefresh,
+      // which never reset the underlying setInterval either.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      expect(llmIntegrationService.getQuota).toHaveBeenCalledTimes(2);
+    });
+
+    it("discards a quota response superseded by a newer request for the same provider", async () => {
+      let firstResolve!: (value: any) => void;
+      const firstPending = new Promise((resolve) => (firstResolve = resolve));
+      vi.mocked(llmIntegrationService.getQuota)
+        .mockReturnValueOnce(firstPending as any)
+        .mockResolvedValueOnce({ ...quotaSnapshot, source: "second" });
+
+      setQuotaWatch(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+      refreshProviderQuota(REGULAR_PROVIDER_WITH_KEY as any);
+      await vi.advanceTimersByTimeAsync(0);
+
+      firstResolve({ ...quotaSnapshot, source: "first-should-be-dropped" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(useWorkspaceStore.getState().providerStatus["regular-with-key"]?.quota?.source).toBe("second");
     });
   });
 });

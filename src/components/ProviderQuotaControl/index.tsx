@@ -1,62 +1,67 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWorkspaceStore } from "../../store";
-import type { CustomProvider, ProviderQuotaSnapshot } from "../../store";
-import { llmIntegrationService } from "../../services/llmIntegrationService";
+import type { CustomProvider } from "../../store";
+import { isEligibleForQuota } from "../../integrations/discoveryPolicy";
+import { providerStatusOrUnknown } from "../../integrations/registryTypes";
+import { refreshProviderQuota, setQuotaWatch } from "../shell/providerCoordinator";
 import type { Option } from "../CustomSelect";
 import { ProviderQuotaControlView } from "./ProviderQuotaControl.view";
-import {
-  isConfiguredProvider,
-  SELECTED_QUOTA_PROVIDER_KEY,
-  REFRESH_INTERVAL_MS,
-} from "./helpers";
-
-/* ── Module-level state ──────────────────────────────────────────────────── */
-
-/** Counter for discarding stale fetch responses. */
-let fetchCounter = 0;
-
-/* ── Component ───────────────────────────────────────────────────────────── */
+import { SELECTED_QUOTA_PROVIDER_KEY } from "./helpers";
 
 /**
- * Controls the display and fetching of provider quota information.
+ * Controls the display of provider quota information. All fetching,
+ * caching, the module-global stale-response counter, and the 5-minute
+ * auto-refresh now live in providerCoordinator.ts's quota watch
+ * (REFACTOR_PLAN.md PR 3b) -- this component's own job is reduced to:
+ * which provider is selected in the dropdown, and telling the coordinator
+ * to watch it. Quota data itself is read straight from the registry
+ * (providerStatus[id].quota/quotaError/quotaLoading), so it survives this
+ * component unmounting and is visible to any other surface that reads the
+ * registry, unlike the local state this replaces.
  *
- * This component manages:
- *  - Persisting the selected provider across sessions
- *  - Fetching and caching quota snapshots
- *  - Auto-refreshing on an interval
- *  - Outside-click / Escape-key dismissal of the dropdown
+ * Eligibility (`isEligibleForQuota`) now checks the registry's actual
+ * status for managed providers, rather than the old isConfiguredProvider
+ * (deleted -- see helpers.ts's history), which treated authType
+ * "environment" as always configured regardless of whether the provider
+ * was actually signed in.
  */
 export const ProviderQuotaControl: React.FC = () => {
   const customProviders = useWorkspaceStore((s) => s.customProviders);
   const activeProviderId = useWorkspaceStore((s) => s.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((s) => s.providerStatus);
 
   const providers = useMemo(
-    () => customProviders.filter(isConfiguredProvider),
-    [customProviders],
+    () =>
+      customProviders.filter((provider) =>
+        isEligibleForQuota({
+          isManaged: MANAGED_PROVIDER_IDS.has(provider.id),
+          statusKind: providerStatusOrUnknown(providerStatus, provider.id).kind,
+          authType: provider.authType,
+          hasApiKey: Boolean(provider.apiKey?.trim()),
+        }),
+      ),
+    [customProviders, providerStatus],
   );
 
   const [selectedId, setSelectedId] = useState(() =>
     localStorage.getItem(SELECTED_QUOTA_PROVIDER_KEY) || activeProviderId || "",
   );
-  const [quotas, setQuotas] = useState<Record<string, ProviderQuotaSnapshot>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [loadingId, setLoadingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   const rootRef = useRef<HTMLDivElement>(null);
 
   const selectedProvider = providers.find((p) => p.id === selectedId) ?? null;
-  const selectedQuota = selectedProvider ? quotas[selectedProvider.id] : undefined;
-  const selectedError = selectedProvider ? errors[selectedProvider.id] : undefined;
-  const loading = loadingId === selectedProvider?.id;
+  const selectedEntry = selectedProvider ? providerStatusOrUnknown(providerStatus, selectedProvider.id) : undefined;
+  const selectedQuota = selectedEntry?.quota;
+  const selectedError = selectedEntry?.quotaError;
+  const loading = Boolean(selectedEntry?.quotaLoading);
 
   /* ── Effects ───────────────────────────────────────────────────────────── */
 
   useFallbackProviderEffect(providers, activeProviderId, selectedId, setSelectedId);
   usePersistSelectedIdEffect(selectedId);
-  useQuotaFetchEffect(selectedProvider, setErrors, setQuotas, setLoadingId);
-  useAutoRefreshEffect(selectedProvider, setErrors, setQuotas, setLoadingId);
+  useQuotaWatchEffect(selectedProvider);
   useDismissEffect(open, setOpen, rootRef);
 
   /* ── Handlers ──────────────────────────────────────────────────────────── */
@@ -71,7 +76,7 @@ export const ProviderQuotaControl: React.FC = () => {
 
   const handleRefresh = useCallback(() => {
     if (!selectedProvider) return;
-    fetchQuota(selectedProvider, setErrors, setQuotas, setLoadingId);
+    refreshProviderQuota(selectedProvider);
   }, [selectedProvider]);
 
   const handleOpenManageUrl = useCallback(() => {
@@ -108,6 +113,8 @@ export const ProviderQuotaControl: React.FC = () => {
 
 export default ProviderQuotaControl;
 
+const MANAGED_PROVIDER_IDS = new Set(["github-copilot", "openai-codex", "anthropic-claude-code"]);
+
 /* ── Effects ─────────────────────────────────────────────────────────────── */
 
 /**
@@ -140,37 +147,14 @@ function usePersistSelectedIdEffect(selectedId: string) {
 }
 
 /**
- * Fetches the quota for the selected provider on mount and when it changes.
+ * Tells the coordinator's quota watch which provider to track, on mount and
+ * whenever the selection changes -- replaces the old useQuotaFetchEffect +
+ * useAutoRefreshEffect pair, both of which owned local fetch/interval logic
+ * this component no longer does.
  */
-function useQuotaFetchEffect(
-  provider: CustomProvider | null,
-  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-  setQuotas: React.Dispatch<React.SetStateAction<Record<string, ProviderQuotaSnapshot>>>,
-  setLoadingId: React.Dispatch<React.SetStateAction<string | null>>,
-) {
+function useQuotaWatchEffect(provider: CustomProvider | null) {
   useEffect(() => {
-    if (!provider) return;
-    fetchQuota(provider, setErrors, setQuotas, setLoadingId);
-  }, [provider]);
-}
-
-/**
- * Sets up an automatic refresh timer for the selected provider's quota.
- */
-function useAutoRefreshEffect(
-  provider: CustomProvider | null,
-  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-  setQuotas: React.Dispatch<React.SetStateAction<Record<string, ProviderQuotaSnapshot>>>,
-  setLoadingId: React.Dispatch<React.SetStateAction<string | null>>,
-) {
-  useEffect(() => {
-    if (!provider) return;
-
-    const timer = window.setInterval(() => {
-      fetchQuota(provider, setErrors, setQuotas, setLoadingId);
-    }, REFRESH_INTERVAL_MS);
-
-    return () => window.clearInterval(timer);
+    setQuotaWatch(provider);
   }, [provider]);
 }
 
@@ -203,53 +187,4 @@ function useDismissEffect(
       document.removeEventListener("keydown", handleEscape);
     };
   }, [open, setOpen, rootRef]);
-}
-
-/* ── Data fetching ───────────────────────────────────────────────────────── */
-
-/**
- * Fetches a quota snapshot for the given provider and updates state.
- * Uses a request counter to discard stale responses.
- */
-async function fetchQuota(
-  provider: CustomProvider,
-  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-  setQuotas: React.Dispatch<React.SetStateAction<Record<string, ProviderQuotaSnapshot>>>,
-  setLoadingId: React.Dispatch<React.SetStateAction<string | null>>,
-): Promise<void> {
-  const currentRequest = ++fetchCounter;
-
-  setLoadingId(provider.id);
-  clearProviderError(provider.id, setErrors);
-
-  try {
-    const quota = await llmIntegrationService.getQuota(provider);
-    if (currentRequest !== fetchCounter) return;
-    setQuotas((prev) => ({ ...prev, [provider.id]: quota }));
-  } catch (error) {
-    if (currentRequest !== fetchCounter) return;
-    setProviderError(provider.id, error, setErrors);
-  } finally {
-    if (currentRequest === fetchCounter) setLoadingId(null);
-  }
-}
-
-function clearProviderError(
-  providerId: string,
-  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-) {
-  setErrors((prev) => {
-    const next = { ...prev };
-    delete next[providerId];
-    return next;
-  });
-}
-
-function setProviderError(
-  providerId: string,
-  error: unknown,
-  setErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-) {
-  const message = error instanceof Error ? error.message : String(error);
-  setErrors((prev) => ({ ...prev, [providerId]: message }));
 }

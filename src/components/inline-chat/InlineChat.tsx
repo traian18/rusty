@@ -9,7 +9,8 @@ import {
 } from "../../services/inlineChatService";
 import { MarkdownRenderer } from "../ui/MarkdownRenderer";
 import { CustomSelect } from "../CustomSelect";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 
 interface InlineChatProps {
   sessionId: string;
@@ -46,8 +47,11 @@ export const InlineChat = ({ sessionId, context, position, onClose }: InlineChat
     };
   }, []);
 
-  const modelOptions = selectableProviderModels(providers, providerStatus, activeProviderId)
-    .map(({ provider, model }) => ({ id: model.id, name: `${provider.name} / ${model.name}` }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    providers,
+    providerStatus,
+    activeProviderId,
+  );
 
   useEffect(() => {
     if (modelOptions.some((option) => option.id === selectedModel)) return;
@@ -77,11 +81,15 @@ export const InlineChat = ({ sessionId, context, position, onClose }: InlineChat
       return;
     }
 
+    const resolution = resolveExecutionProvider(providers, providerStatus, activeProviderId, selectedModel);
+    if (!resolution.ok) {
+      setError(resolution.message);
+      return;
+    }
+    const provider = resolution.provider;
+
     const userMessage: InlineChatMessage = { role: "user", content: prompt };
     const history = [...messages, userMessage];
-    const provider = providers.find((item) => providerHasModelReference(item, selectedModel))
-      || providers.find((item) => item.id === activeProviderId)
-      || null;
 
     setMessages(history);
     setInput("");
@@ -147,7 +155,9 @@ export const InlineChat = ({ sessionId, context, position, onClose }: InlineChat
             value={selectedModel}
             onChange={setSelectedModel}
             options={modelOptions}
-            placeholder="Select model"
+            placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+              ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+              : "Select model"}
             className="ml-auto w-56 max-w-[45%]"
             buttonClassName="flex w-full items-center justify-between rounded border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1 text-left text-[length:var(--font-size-chat-xs)] text-[var(--text-normal)]"
           />

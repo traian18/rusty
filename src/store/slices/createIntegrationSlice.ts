@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { McpServerConfig } from "../../components/mcp/types";
 import { BUILT_IN_SKILLS, DEFAULT_SKILL_ID } from "../../config/skillDefinitions";
 import { skillsService } from "../../services/skillsService";
-import { resolveTheme } from "../../theme";
+import { loadStoredThemeId, saveThemeId } from "../../preferences/theme";
 import {
   normalizeStoredModelReference,
   normalizeStoredProvider,
@@ -12,18 +12,11 @@ import {
 import type { WorkspaceSliceCreator } from "../sliceTypes";
 import type { CustomProvider, LspSettings, Skill, WorkspaceState } from "../types";
 
-const THEME_STORAGE_KEY = "selected_theme";
-
-function loadStoredThemeId(): string | null {
-  const storedThemeId = localStorage.getItem(THEME_STORAGE_KEY);
-  return storedThemeId ? resolveTheme(storedThemeId).id : null;
-}
-
-function saveThemeId(themeId: string): string {
-  const resolvedThemeId = resolveTheme(themeId).id;
-  localStorage.setItem(THEME_STORAGE_KEY, resolvedThemeId);
-  return resolvedThemeId;
-}
+/** Matches src/theme.ts's own default (`themes.spaceDust`); a bare string
+ * literal here rather than an import + resolveTheme() call, matching this
+ * file's existing `activeCustomProviderId: "opencode"` precedent -- the
+ * point is a constant with no I/O, not resolving it through the registry. */
+const DEFAULT_THEME_ID = "spaceDust";
 
 const defaultProviders: CustomProvider[] = [
   {
@@ -128,19 +121,6 @@ const defaultLspSettings: LspSettings = {
   },
 };
 
-function loadStoredMcpServers(): Record<string, McpServerConfig> {
-  try {
-    const raw = localStorage.getItem("rusty_mcp_config");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.mcpServers && typeof parsed.mcpServers === "object") return parsed.mcpServers;
-    }
-  } catch {
-    // Secure configuration loading will restore this later when available.
-  }
-  return {};
-}
-
 export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   customProviders: defaultProviders,
   activeCustomProviderId: "opencode",
@@ -148,8 +128,12 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   lspSettings: defaultLspSettings,
   skills: BUILT_IN_SKILLS,
   activeSkillId: DEFAULT_SKILL_ID,
-  mcpServers: loadStoredMcpServers(),
-  activeThemeId: loadStoredThemeId() || resolveTheme("spaceDust").id,
+  // No hydrate action needed: this was a dead read (localStorage key
+  // "rusty_mcp_config" is never written anywhere in the repo -- real MCP
+  // restore happens in loadSecureConfig below, from "rusty_secure_config").
+  // Deleted outright rather than replaced (REFACTOR_PLAN.md PR 3a).
+  mcpServers: {},
+  activeThemeId: DEFAULT_THEME_ID,
 
   updateLspSettings: (settings) => set((state) => {
     setTimeout(() => void get().saveSecureConfig(), 0);
@@ -241,6 +225,11 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
     const activeThemeId = saveThemeId(themeId);
     set({ activeThemeId });
   },
+
+  // Called from main.tsx, synchronously, before createRoot -- never at
+  // slice-creation time. Reproduces exactly the computation the old
+  // creation-time initializer ran (REFACTOR_PLAN.md PR 3a).
+  hydrateTheme: () => set({ activeThemeId: loadStoredThemeId() || DEFAULT_THEME_ID }),
 
   saveSecureConfig: async () => {
     const state = get();

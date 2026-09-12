@@ -315,14 +315,24 @@ export interface WorkspaceState {
   updateMcpServer: (name: string, updates: Partial<McpServerConfig>) => void;
   removeMcpServer: (name: string) => void;
 
+  /**
+   * Initializes to a constant and is hydrated from localStorage only via
+   * hydrateTheme(), called from main.tsx before createRoot -- never at
+   * slice-creation time. See ARCHITECTURE.md's "slice import-time purity".
+   */
   activeThemeId: string;
   setActiveThemeId: (themeId: string) => void;
+  hydrateTheme: () => void;
+  /** Same hydration contract as hydrateTheme() above. */
   typographyPreferences: TypographyPreferences;
   setTypographyPreference: (key: keyof TypographyPreferences, value: number) => void;
   resetTypographyPreferences: () => void;
+  hydrateTypography: () => void;
+  /** Same hydration contract as hydrateTheme() above. */
   keyboardShortcuts: KeyboardShortcutPreferences;
   setKeyboardShortcut: (action: ShortcutAction, shortcut: string) => void;
   resetKeyboardShortcuts: () => void;
+  hydrateShortcuts: () => void;
 
   setRootPath: (path: string) => void;
   setGitStatus: (status: GitStatusResult | null) => void;

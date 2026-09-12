@@ -437,7 +437,7 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 - [x] Global and explorer chat. (`agentChatService.ts` for the chat send, `globalExploreService.ts` for Summarize; global_explore also gained real cancellation via a new `global_explore_stop`, which did not exist before, and its `token` event gained a correlating `nodeId`)
 - [x] Task generation. (`taskGenerationService.ts`; also fixed the `generate_task_nodes_stopped` dual-shape bug)
 - [ ] Skill generation.
-- [ ] Edge reconciliation.
+- [x] Edge reconciliation. (`edgeReconciliationService.ts`; gained real cancellation via a new `reconciliate_edge_stop`, and command-permission requests are now wired at all, previously silently dropped)
 - [ ] Graph reconciliation.
 - [ ] Test and build execution.
 - [ ] Inline chat.

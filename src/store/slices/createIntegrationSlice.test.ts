@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationTestStore } from "../../test/integrationTestStore";
 import { THEME_STORAGE_KEY } from "../../preferences/theme";
 import { theme as defaultTheme } from "../../theme";
+import { SecureStorageService } from "../../services/secureStorageService";
+
+vi.mock("../../services/secureStorageService", () => ({
+  SecureStorageService: {
+    loadSecureData: vi.fn(),
+    saveSecureData: vi.fn(),
+  },
+}));
 
 describe("createIntegrationSlice: creation-time purity (REFACTOR_PLAN.md PR 3a)", () => {
   it("composes without throwing even when localStorage.getItem throws", () => {
@@ -85,5 +93,75 @@ describe("createIntegrationSlice: hydrateTheme", () => {
     testStore.getState().setActiveThemeId("dark");
     expect(testStore.getState().activeThemeId).toBe("dark");
     expect(store.get(THEME_STORAGE_KEY)).toBe("dark");
+  });
+});
+
+describe("createIntegrationSlice: secureConfigLoaded guard (the data-loss fix, REFACTOR_PLAN.md PR 3a)", () => {
+  beforeEach(() => {
+    vi.mocked(SecureStorageService.loadSecureData).mockReset();
+    vi.mocked(SecureStorageService.saveSecureData).mockReset();
+  });
+
+  it("starts false", () => {
+    expect(createIntegrationTestStore().getState().secureConfigLoaded).toBe(false);
+  });
+
+  it("saveSecureConfig is a no-op before loadSecureConfig has ever run", async () => {
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().saveSecureConfig();
+
+    expect(SecureStorageService.saveSecureData).not.toHaveBeenCalled();
+  });
+
+  it("loadSecureConfig sets secureConfigLoaded even when nothing was ever saved (a fresh install)", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue(null);
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    expect(testStore.getState().secureConfigLoaded).toBe(true);
+  });
+
+  it("loadSecureConfig sets secureConfigLoaded after successfully restoring a saved config", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({ configVersion: 1 });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    expect(testStore.getState().secureConfigLoaded).toBe(true);
+  });
+
+  it("leaves secureConfigLoaded false when loadSecureConfig itself rejects", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockRejectedValue(new Error("decrypt failed"));
+    const testStore = createIntegrationTestStore();
+
+    await expect(testStore.getState().loadSecureConfig()).rejects.toThrow("decrypt failed");
+
+    expect(testStore.getState().secureConfigLoaded).toBe(false);
+  });
+
+  it("saveSecureConfig proceeds once secureConfigLoaded is true", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue(null);
+    const testStore = createIntegrationTestStore();
+    await testStore.getState().loadSecureConfig();
+
+    await testStore.getState().saveSecureConfig();
+
+    expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(1);
+  });
+
+  it("the 'Continue anyway' path (a rejected load, then the user proceeds) keeps save guarded", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockRejectedValue(new Error("decrypt failed"));
+    const testStore = createIntegrationTestStore();
+    await testStore.getState().loadSecureConfig().catch(() => {});
+
+    // The view's "Continue anyway" is a local React state transition only --
+    // it never retries loadSecureConfig -- so secureConfigLoaded legitimately
+    // never becomes true on this path, and any later settings mutation that
+    // fires saveSecureConfig must still be a no-op.
+    await testStore.getState().saveSecureConfig();
+
+    expect(SecureStorageService.saveSecureData).not.toHaveBeenCalled();
   });
 });

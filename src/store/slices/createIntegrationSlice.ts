@@ -134,6 +134,7 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   // Deleted outright rather than replaced (REFACTOR_PLAN.md PR 3a).
   mcpServers: {},
   activeThemeId: DEFAULT_THEME_ID,
+  secureConfigLoaded: false,
 
   updateLspSettings: (settings) => set((state) => {
     setTimeout(() => void get().saveSecureConfig(), 0);
@@ -233,6 +234,22 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
 
   saveSecureConfig: async () => {
     const state = get();
+    // Guards against a real data-loss bug: saveSecureConfig writes the
+    // ENTIRE snapshot (providers/API keys/lastWorkspacePath/MCP servers),
+    // and nine call sites in this file fire it via setTimeout on nearly
+    // every settings mutation. Before loadSecureConfig has completed (or
+    // if it failed and the user clicked "Continue anyway"), the store is
+    // still holding defaultProviders with empty apiKeys and rootPath: "" --
+    // writing that over a real, previously-saved encrypted blob would
+    // silently destroy it. secureConfigLoaded is set only once
+    // loadSecureConfig finishes (REFACTOR_PLAN.md PR 3a).
+    if (!state.secureConfigLoaded) {
+      console.warn(
+        "saveSecureConfig: skipped -- secure config has not finished loading yet " +
+        "(saving now would overwrite it with incomplete/default state).",
+      );
+      return;
+    }
     const { SecureStorageService } = await import("../../services/secureStorageService");
     await SecureStorageService.saveSecureData("rusty_secure_config", {
       configVersion: PROVIDER_CONFIG_VERSION,
@@ -257,7 +274,13 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
       mcpServers?: Record<string, McpServerConfig>;
       lspSettings?: LspSettings;
     }>("rusty_secure_config");
-    if (!config) return;
+    if (!config) {
+      // Nothing has ever been saved (e.g. a fresh install) -- that is a
+      // successfully "loaded" (empty) state, not a failure, so saving is
+      // safe from here on.
+      set({ secureConfigLoaded: true });
+      return;
+    }
 
     const updates: Partial<WorkspaceState> = {};
     const configVersion = config.configVersion || 0;
@@ -315,5 +338,12 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
         console.error("Failed to load last workspace folder:", error);
       }
     }
+
+    // Set only now, after the optional workspace-restore attempt above has
+    // settled (not right after `set(updates)`): a saveSecureConfig firing in
+    // the window while that invoke is still in flight would otherwise write
+    // lastWorkspacePath as rootPath's still-empty pre-restore value,
+    // silently losing the just-restored path on the very next save.
+    set({ secureConfigLoaded: true });
   },
 });

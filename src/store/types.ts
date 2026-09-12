@@ -431,6 +431,11 @@ export interface WorkspaceState {
   getSequenceEdges: () => Edge[];
   lspSettings: LspSettings;
   updateLspSettings: (settings: Partial<LspSettings>) => void;
+  /** True only once loadSecureConfig has fully settled (including any
+      workspace restore it triggers) -- saveSecureConfig is a no-op until
+      then, so a failed/incomplete load can never overwrite a real,
+      previously-saved config with default state (REFACTOR_PLAN.md PR 3a). */
+  secureConfigLoaded: boolean;
   saveSecureConfig: () => Promise<void>;
   loadSecureConfig: () => Promise<void>;
 }

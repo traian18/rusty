@@ -7,7 +7,9 @@ import type {
 } from "../../services/llmIntegrationService";
 import { createSemaphore } from "../../integrations/concurrency";
 import { isFastPollExpired, nextPollDelayMs, STALLED_LOGIN_MESSAGE } from "../../integrations/schedule";
-import type { ProviderStatus } from "../../store/types";
+import { DISCOVERY_CONCURRENCY, isCatalogStale, isEligibleForDiscovery } from "../../integrations/discoveryPolicy";
+import { providerStatusOrUnknown } from "../../integrations/registryTypes";
+import type { CustomProvider, ProviderStatus } from "../../store/types";
 
 /**
  * Owns the out-of-React polling that populates the integration registry
@@ -121,6 +123,11 @@ export function mapManagedStatus(status: ManagedStatus): ProviderStatus {
 function applySettled(id: ManagedProviderId, status: ManagedStatus, mySeq: number): void {
   if (latestRequestSeq.get(id) !== mySeq) return;
   useWorkspaceStore.getState().patchProviderStatus(id, mapManagedStatus(status));
+  // A managed provider's models can only ever be discovered once it's
+  // actually signed in -- check right away rather than waiting for the
+  // next hourly sweep, so a fresh sign-in doesn't sit with an empty
+  // catalog for up to an hour.
+  maybeDiscoverForProvider(id);
 }
 
 function applyError(id: ManagedProviderId, error: unknown, mySeq: number): void {
@@ -170,6 +177,90 @@ function scheduleNextPoll(id: ManagedProviderId): void {
 }
 
 /**
+ * Background model discovery (REFACTOR_PLAN.md PR 3b commit 7). Separate
+ * from the status-check semaphore above: Copilot/Codex/Claude Code's
+ * discovery calls are just as expensive as their status checks, and a
+ * regular (non-managed) provider's discovery has no status-check cycle to
+ * piggyback on at all, so it needs its own bound.
+ */
+const discoverySemaphore = createSemaphore(DISCOVERY_CONCURRENCY);
+/** Guards against the same provider being discovered twice concurrently --
+ * e.g. a managed provider settling to "ready" right as the hourly sweep is
+ * already checking it. */
+const discoveryInFlight = new Set<string>();
+
+function isDueForDiscovery(provider: CustomProvider, nowMs: number): boolean {
+  const status = providerStatusOrUnknown(useWorkspaceStore.getState().providerStatus, provider.id);
+  const isManaged = (MANAGED_PROVIDER_IDS as readonly string[]).includes(provider.id);
+  const eligible = isEligibleForDiscovery({
+    isManaged,
+    statusKind: status.kind,
+    authType: provider.authType,
+    hasApiKey: Boolean(provider.apiKey?.trim()),
+  });
+  return eligible && isCatalogStale({ modelsFetchedAt: provider.modelsFetchedAt }, nowMs);
+}
+
+/**
+ * Only ever called with the CURRENT saved provider object (never a form
+ * draft) -- unlike LlmSetupTab's user-initiated Fetch/Test, which must
+ * operate on unsaved edits (providerWithDraftSettings, LlmSetupTab.tsx),
+ * background discovery has no draft to merge: it runs against whatever is
+ * already persisted. Writes only `models`/`modelsFetchedAt` -- deliberately
+ * never touches activeModel, unlike LlmSetupTab's own success handler,
+ * since a background refresh silently changing what the user has selected
+ * would be a surprise no user asked for.
+ */
+async function discoverModelsForProvider(provider: CustomProvider): Promise<void> {
+  if (discoveryInFlight.has(provider.id)) return;
+  discoveryInFlight.add(provider.id);
+  try {
+    await discoverySemaphore.run(async () => {
+      const models = await llmIntegrationService.discoverModels(provider);
+      useWorkspaceStore.getState().updateProviderSettings(provider.id, {
+        models,
+        modelsFetchedAt: new Date().toISOString(),
+      });
+    });
+  } catch (error) {
+    console.error(`Background model discovery failed for "${provider.id}":`, error);
+  } finally {
+    discoveryInFlight.delete(provider.id);
+  }
+}
+
+function maybeDiscoverForProvider(providerId: string): void {
+  if (!started) return;
+  const provider = useWorkspaceStore.getState().customProviders.find((candidate) => candidate.id === providerId);
+  if (!provider || !isDueForDiscovery(provider, Date.now())) return;
+  void discoverModelsForProvider(provider);
+}
+
+/**
+ * Covers regular (non-managed) providers, which have no status-check cycle
+ * to trigger discovery from, and re-checks managed providers too in case
+ * one came due for a refresh between poll-driven checks. An hour between
+ * sweeps against a 24h TTL is deliberately coarse -- discovery isn't
+ * urgent, and every sweep tick costs at most DISCOVERY_CONCURRENCY
+ * simultaneous sidecar calls.
+ */
+const DISCOVERY_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
+let discoverySweepTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleDiscoverySweep(): void {
+  if (!started) return;
+  discoverySweepTimer = setTimeout(() => {
+    void runDiscoverySweep().finally(scheduleDiscoverySweep);
+  }, DISCOVERY_SWEEP_INTERVAL_MS);
+}
+
+async function runDiscoverySweep(): Promise<void> {
+  const now = Date.now();
+  const due = useWorkspaceStore.getState().customProviders.filter((provider) => isDueForDiscovery(provider, now));
+  await Promise.all(due.map((provider) => discoverModelsForProvider(provider)));
+}
+
+/**
  * Idempotent -- a second call while already started is a no-op, the same
  * shape as beginRun()'s own activeRun guard in AppBootstrapBoundary.tsx.
  */
@@ -179,6 +270,7 @@ export function startProviderCoordinator(): void {
   for (const id of MANAGED_PROVIDER_IDS) {
     void checkProviderStatus(id);
   }
+  void runDiscoverySweep().finally(scheduleDiscoverySweep);
 }
 
 /** Cancels every pending timer and resets all bookkeeping. Exported for
@@ -192,4 +284,7 @@ export function stopProviderCoordinator(): void {
   }
   runtime.clear();
   latestRequestSeq.clear();
+  if (discoverySweepTimer !== undefined) clearTimeout(discoverySweepTimer);
+  discoverySweepTimer = undefined;
+  discoveryInFlight.clear();
 }

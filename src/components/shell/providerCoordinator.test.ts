@@ -19,13 +19,47 @@ vi.mock("../../services/llmIntegrationService", () => ({
     getCopilotStatus: vi.fn(),
     getCodexStatus: vi.fn(),
     getClaudeCodeStatus: vi.fn(),
+    discoverModels: vi.fn(),
   },
 }));
+
+/** A minimal, deterministic provider fixture -- NOT the real defaultProviders
+ * (createIntegrationSlice.ts), since this test file runs against the real,
+ * singleton useWorkspaceStore and must not depend on incidental fields
+ * (apiKey/authType) of the app's actual default catalog. */
+const REGULAR_PROVIDER_WITH_KEY = {
+  id: "regular-with-key",
+  name: "Regular (API key)",
+  baseUrl: "https://example.test/v1",
+  apiKey: "sk-test",
+  apiType: "openai-completions",
+  authType: "bearer" as const,
+  models: [],
+};
+const REGULAR_PROVIDER_NO_KEY = {
+  id: "regular-no-key",
+  name: "Regular (no key)",
+  baseUrl: "https://example.test/v1",
+  apiKey: "",
+  apiType: "openai-completions",
+  authType: "bearer" as const,
+  models: [],
+};
+const MANAGED_PROVIDER_FIXTURE = {
+  id: "github-copilot",
+  name: "GitHub Copilot",
+  baseUrl: "",
+  apiKey: "",
+  apiType: "copilot-sdk",
+  authType: "environment" as const,
+  models: [],
+};
 
 function resetManagedProviderStatus() {
   useWorkspaceStore.setState({
     providerStatus: {},
     tabs: [],
+    customProviders: [REGULAR_PROVIDER_WITH_KEY, REGULAR_PROVIDER_NO_KEY, MANAGED_PROVIDER_FIXTURE],
   } as any);
 }
 
@@ -103,6 +137,7 @@ describe("providerCoordinator", () => {
     vi.mocked(llmIntegrationService.getCopilotStatus).mockReset();
     vi.mocked(llmIntegrationService.getCodexStatus).mockReset();
     vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockReset();
+    vi.mocked(llmIntegrationService.discoverModels).mockReset().mockResolvedValue([]);
     vi.useFakeTimers();
   });
 
@@ -270,4 +305,104 @@ describe("providerCoordinator", () => {
   // so there is nothing to exercise it against yet without leaking a
   // permanently-queued task into the shared concurrency semaphore. It gets
   // a real test once a manual-refresh entry point exists (a later commit).
+
+  describe("background model discovery", () => {
+    const discoveredModels = [{ id: "regular-with-key/some-model", name: "Some Model", supported: true }];
+
+    it("discovers models on start for a regular provider with an API key", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.discoverModels).mockImplementation(async (provider: any) =>
+        provider.id === "regular-with-key" ? discoveredModels : [],
+      );
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.discoverModels).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "regular-with-key" }),
+      );
+      const provider = useWorkspaceStore.getState().customProviders.find((p) => p.id === "regular-with-key");
+      expect(provider?.models).toEqual(discoveredModels);
+      expect(provider?.modelsFetchedAt).toEqual(expect.any(String));
+    });
+
+    it("never discovers a regular provider with no API key", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const calledIds = vi.mocked(llmIntegrationService.discoverModels).mock.calls.map((call) => call[0].id);
+      expect(calledIds).not.toContain("regular-no-key");
+    });
+
+    it("does not discover a managed provider until its status is 'ready'", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "connecting", authenticated: false });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const calledIds = vi.mocked(llmIntegrationService.discoverModels).mock.calls.map((call) => call[0].id);
+      expect(calledIds).not.toContain("github-copilot");
+    });
+
+    it("discovers a managed provider's models as soon as its status settles to 'ready'", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "connected", authenticated: true });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(llmIntegrationService.discoverModels).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "github-copilot" }),
+      );
+    });
+
+    it("does not re-discover a catalog that was fetched within the TTL", async () => {
+      useWorkspaceStore.setState((state) => ({
+        customProviders: state.customProviders.map((p) =>
+          p.id === "regular-with-key" ? { ...p, modelsFetchedAt: new Date().toISOString() } : p,
+        ),
+      }));
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const calledIds = vi.mocked(llmIntegrationService.discoverModels).mock.calls.map((call) => call[0].id);
+      expect(calledIds).not.toContain("regular-with-key");
+    });
+
+    it("bounds discovery concurrency across providers", async () => {
+      vi.mocked(llmIntegrationService.getCopilotStatus).mockResolvedValue({ state: "connected", authenticated: true });
+      vi.mocked(llmIntegrationService.getCodexStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      vi.mocked(llmIntegrationService.getClaudeCodeStatus).mockResolvedValue({ state: "disconnected", authenticated: false });
+      let activeDiscoveries = 0;
+      let maxObserved = 0;
+      vi.mocked(llmIntegrationService.discoverModels).mockImplementation(async () => {
+        activeDiscoveries++;
+        maxObserved = Math.max(maxObserved, activeDiscoveries);
+        await Promise.resolve();
+        activeDiscoveries--;
+        return [];
+      });
+
+      startProviderCoordinator();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Three eligible providers by the time copilot settles to "ready"
+      // (regular-with-key, and github-copilot once ready) -- concurrency
+      // is bounded at DISCOVERY_CONCURRENCY (2).
+      expect(maxObserved).toBeLessThanOrEqual(2);
+    });
+  });
 });

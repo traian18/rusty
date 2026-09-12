@@ -48,6 +48,13 @@ export interface CustomProvider {
   authType?: "bearer" | "anthropic" | "none" | "environment";
   catalogUrl?: string;
   models: ProviderModel[];
+  /** ISO timestamp of the last successful discoverModels() call for this
+      provider (REFACTOR_PLAN.md PR 3b). Absent means "never discovered" --
+      what lets createIntegrationSlice's load-time merge stop conflating
+      that with "discovered and legitimately empty" (a saved empty models
+      array used to always fall back to the hardcoded defaults). Optional,
+      so no PROVIDER_CONFIG_VERSION bump was needed to add it. */
+  modelsFetchedAt?: string;
 }
 
 export type ProviderQuotaState = "available" | "unavailable" | "unauthenticated";

@@ -272,3 +272,84 @@ describe("createIntegrationSlice: scheduleSaveSecureConfig coalescing (REFACTOR_
     expect(SecureStorageService.saveSecureData).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("createIntegrationSlice: loadSecureConfig's provider-merge, modelsFetchedAt (REFACTOR_PLAN.md PR 3b)", () => {
+  beforeEach(() => {
+    vi.mocked(SecureStorageService.loadSecureData).mockReset();
+    vi.mocked(SecureStorageService.saveSecureData).mockReset();
+  });
+
+  it("characterizes the pre-fix behavior this replaces: a saved empty models array with no modelsFetchedAt still falls back to the hardcoded defaults", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({
+      configVersion: 2,
+      customProviders: [{ id: "anthropic", name: "Anthropic", baseUrl: "https://api.anthropic.com/v1", apiKey: "sk-test", apiType: "anthropic-messages", authType: "anthropic", models: [] }],
+    });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    const anthropic = testStore.getState().customProviders.find((p) => p.id === "anthropic");
+    // Can't tell "never discovered" from "discovered and empty" without
+    // modelsFetchedAt -- this is the exact ambiguity the field below
+    // resolves. Preserved for configs saved before the field existed.
+    expect(anthropic?.models.length).toBeGreaterThan(0);
+  });
+
+  it("trusts a saved empty models array once modelsFetchedAt proves discovery actually ran -- the fix", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({
+      configVersion: 2,
+      customProviders: [{
+        id: "anthropic",
+        name: "Anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: "sk-test",
+        apiType: "anthropic-messages",
+        authType: "anthropic",
+        models: [],
+        modelsFetchedAt: "2026-09-01T00:00:00.000Z",
+      }],
+    });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    const anthropic = testStore.getState().customProviders.find((p) => p.id === "anthropic");
+    expect(anthropic?.models).toEqual([]);
+    expect(anthropic?.modelsFetchedAt).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("keeps a saved NON-empty models array regardless of modelsFetchedAt", async () => {
+    const savedModel = { id: "anthropic/custom-model", name: "Custom Model", supported: true };
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({
+      configVersion: 2,
+      customProviders: [{
+        id: "anthropic",
+        name: "Anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: "sk-test",
+        apiType: "anthropic-messages",
+        authType: "anthropic",
+        models: [savedModel],
+      }],
+    });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    const anthropic = testStore.getState().customProviders.find((p) => p.id === "anthropic");
+    expect(anthropic?.models).toEqual([
+      expect.objectContaining({ id: "anthropic/custom-model", name: "Custom Model" }),
+    ]);
+  });
+
+  it("a provider never saved at all keeps the hardcoded defaults, with modelsFetchedAt still absent", async () => {
+    vi.mocked(SecureStorageService.loadSecureData).mockResolvedValue({ configVersion: 2, customProviders: [] });
+    const testStore = createIntegrationTestStore();
+
+    await testStore.getState().loadSecureConfig();
+
+    const anthropic = testStore.getState().customProviders.find((p) => p.id === "anthropic");
+    expect(anthropic?.models.length).toBeGreaterThan(0);
+    expect(anthropic?.modelsFetchedAt).toBeUndefined();
+  });
+});

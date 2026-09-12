@@ -323,7 +323,17 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
               ...savedProvider,
               baseUrl: savedProvider.baseUrl || defaultProvider.baseUrl,
               catalogUrl: savedProvider.catalogUrl || defaultProvider.catalogUrl,
-              models: savedProvider.models?.length ? savedProvider.models : defaultProvider.models,
+              // modelsFetchedAt present means discovery has actually run at
+              // least once for this provider -- trust its saved models even
+              // when empty, rather than the old behavior (REFACTOR_PLAN.md
+              // PR 3b) of silently falling back to the hardcoded defaults
+              // for ANY empty saved array, which made "never discovered"
+              // and "discovered and legitimately empty" indistinguishable.
+              // Absent (an older saved config, or one that's simply never
+              // been through discoverModels()) keeps the old fallback.
+              models: savedProvider.modelsFetchedAt
+                ? savedProvider.models
+                : (savedProvider.models?.length ? savedProvider.models : defaultProvider.models),
             }
           : defaultProvider;
       });

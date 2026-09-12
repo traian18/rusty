@@ -416,6 +416,46 @@ PBKDF2 at 100,000 iterations; without coalescing, background discovery
 stamping `modelsFetchedAt` on every eligible provider at launch would
 have triggered a full rewrite per provider, every launch.
 
+**PR 3c moved every remaining consumer onto this registry** — the
+producer/consumer split above is 3b; 3c is everything that reads from
+it. Three shared primitives replace what used to be reimplemented per
+call site:
+
+- `selectableModelProviders`/`selectableProviderModels`
+  (`src/store/providerHelpers.ts`) gained a `providerStatus` parameter:
+  a managed provider is included only once its status is `ready`,
+  exactly mirroring `isEligibleForDiscovery`'s rule. Before this, every
+  model picker in the app still treated `authType === "environment"`
+  alone as "configured" — the same bug 3b fixed for discovery/quota,
+  never applied to the pickers themselves.
+- `resolveExecutionProvider` (`src/store/resolveExecutionProvider.ts`)
+  is the one execution-time resolver, replacing 9 independent
+  `getState()` lookups (8 originally scoped across `Workspace.tsx`,
+  `useExplorerWebSocket.ts` ×3, `useEdgeWebSocket.ts`, `AgentTab.tsx`,
+  `SkillsTab.tsx`, `ReconciliationGraphPane.tsx` ×2 — plus a 9th,
+  `InlineChat.tsx`, found only while migrating its picker, missed by
+  the original survey). A managed provider not yet `ready` is refused
+  with a distinct message for `status-pending` (`unknown`/`loading` —
+  normal for the first several seconds after launch) versus
+  `not-authenticated` (`unauthenticated`/`error` — actually needs sign
+  in); a regular provider is never gated on status at all, mirroring
+  the same asymmetry as the helper above.
+- `useSelectableModels` (`src/hooks/useSelectableModels.ts`) is the one
+  picker hook, replacing 11 separate option-list constructions across 5
+  label formats with one (`${provider.name} / ${model.name}`), adding
+  uniform memoization (previously only one picker memoized), and a
+  companion `unauthenticatedProviders` list so a picker can render "Sign
+  in to X" instead of silently going empty.
+
+**The MCP "Test Connection" button now does a real handshake.**
+`agent-sidecar/src/services/mcpClient.ts`'s `testMcpConnection` shares
+`createClient()` with `createMcpTools()` but does not swallow a connect
+failure the way that function deliberately does for run-time graceful
+degradation — a test button needs the real thrown error. Reached via a
+new `POST /mcp/test` sidecar route and a frontend `mcpTestService.ts`
+that reuses `llmIntegrationService.ts`'s `request()` directly. On demand
+only, exactly as decided for 3b: no MCP validation happens at startup.
+
 ## Migration rules (for PRs 1-7)
 
 - Each PR leaves the app buildable (`npm run build` passes) at every commit

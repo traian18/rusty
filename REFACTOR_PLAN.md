@@ -5,7 +5,7 @@
 - [x] PR 0 — Establish the baseline and test harness
 - [x] PR 1 — Replace editor groups with a declarative single-workspace tab system
 - [x] PR 2 — Refactor the application shell and hide the explorer by default
-- [ ] PR 3 — Add an extensible application startup procedure
+- [x] PR 3 — Add an extensible application startup procedure
 - [ ] PR 4 — Complete the shared sidecar agent protocol migration
 - [ ] PR 5 — Complete Git integration, including detached HEAD and submodules
 - [ ] PR 6 — Add major-language syntax highlighting and safe file handling
@@ -244,17 +244,17 @@ The workspace occupies the main window, no split affordance remains, and explore
 ## PR 3 — Extensible application startup procedure
 
 Split mid-PR into **3a** (the startup coordinator itself — done), **3b**
-(the provider/integration registry: producer side — done, this section),
-and **3c** (consumer side: every model selector, the execution-time
-`getState()` resolvers, and MCP validation onto the same registry — not
-started). 3b split again into 3b/3c mid-implementation, for the same
+(the provider/integration registry: producer side — done), and **3c**
+(consumer side: every model selector, the execution-time `getState()`
+resolvers, and MCP validation onto the same registry — **done, this
+section**). 3b split again into 3b/3c mid-implementation, for the same
 reason 3 split into 3a/3b: the measured surface (~1,200 lines of LLM-setup
 UI, ~800 of quota UI, 13 further consumer files across 11 model pickers)
 was too much for one PR, and there is a clean producer/consumer seam —
-3b builds the registry and rewires the two surfaces that owned the
-duplicated state (`LlmSetupTab`, `ProviderQuotaControl`); 3c moves every
-remaining consumer onto it. This PR's top-level checklist stays incomplete
-until 3c lands too.
+3b built the registry and rewired the two surfaces that owned the
+duplicated state (`LlmSetupTab`, `ProviderQuotaControl`); 3c moved every
+remaining consumer onto it. All three parts are done; this PR's
+top-level checklist is complete.
 
 ### Startup state
 
@@ -293,7 +293,7 @@ type StartupState =
 - [x] Check Codex, Claude Code, and Copilot authentication concurrently. (3b — `providerCoordinator.ts`'s status checks, bounded at concurrency 2.)
 - [x] Discover or refresh models for every configured provider with bounded concurrency. (3b — TTL 24h, concurrency 2, gated on a managed provider actually being `ready`; see deviations for why this is a background sweep rather than a startup step.)
 - [x] Load MCP configuration. (3a — restored as part of `loadSecureConfig`, unchanged from before this PR.)
-- [~] Validate configured MCP servers where startup validation is appropriate. (Deliberately narrowed, not deferred: real validation (a sidecar route doing a genuine `initialize` + `tools/list`) is 3c's job, wired to the existing Test Connection button — **on demand only**. Startup does not validate every configured server; spawning a process per server on every launch was judged not "appropriate" here. Recorded as a decision, not a gap.)
+- [~] Validate configured MCP servers where startup validation is appropriate. (Deliberately narrowed, not deferred: real validation (a sidecar route doing a genuine `initialize` + `tools/list`, `POST /mcp/test`) is done — 3c — wired to the existing Test Connection button, **on demand only**. Startup does not validate every configured server; spawning a process per server on every launch was judged not "appropriate" here. Recorded as a decision, not a gap.)
 - [x] Restore the last workspace. (3a — `workspace-restore` step; non-destructive, unlike `setRootPath`.)
 - [x] Load skills for the restored workspace. (3a — via `loadWorkspaceData`, shared with `setRootPath`.)
 - [~] Discover repositories and load Git status. (3a loads git **status** for the restored workspace via `loadWorkspaceData`. Repository **discovery** — `git_scan_subprojects` — stays lazy, triggered only by opening the Source Control drawer, same as before this PR; moving it to startup was never in scope for 3a, 3b, or 3c.)
@@ -304,7 +304,7 @@ type StartupState =
 - [x] Start background provider-status and quota refreshers. (3b — `providerCoordinator.ts`: status polling (1s while any login is `connecting`, capped at 5 min; 10s while LLM Setup is open; 5 min otherwise), a 24h-TTL model-discovery sweep, and a single-provider quota watch matching `ProviderQuotaControl`'s existing one-at-a-time behavior.)
 - [x] Remove integration status polling from the lifecycle of `LlmSetupTab`. (3b — `useManagedProviderStatus.ts` deleted outright; the tab now reads whatever the coordinator has already settled, whether or not it's ever been opened.)
 - [x] Store provider status globally as `unknown`, `loading`, `ready`, `unauthenticated`, or `error`. (3b — `createProviderRegistrySlice.ts`'s `providerStatus: Record<id, ProviderStatus>`; `unauthenticated` is a first-class kind distinct from `error`, fixing the bug where an unauthenticated managed provider's models just vanished from every dropdown with no explanation.)
-- [ ] Make every model selector consume the same global integration registry. (3c — the 11 pickers and 6 duplicated "is my model still valid" fallbacks across ~13 files are unmoved; only `LlmSetupTab`'s own picker and `ProviderQuotaControl` were rewired in 3b.)
+- [x] Make every model selector consume the same global integration registry. (3c — `selectableModelProviders`/`selectableProviderModels` gated on real registry status (not `authType === "environment"`), a shared `resolveExecutionProvider` replacing 9 independent execution-time lookups (8 originally scoped, plus a 9th — `InlineChat.tsx` — found in passing), and a shared `useSelectableModels` hook replacing all 11 duplicated pickers across 5 label formats with one.)
 
 ### Startup order
 
@@ -320,7 +320,7 @@ type StartupState =
 
 Immediately after startup, every application surface sees the same settled provider, model, authentication, quota, and integration error state. Visiting or hovering over the integrations UI is not required.
 
-**Not yet met — this is 3c's completion criterion, unaffected by 3a/3b.** 3a's own, narrower criterion (the coordinator reaches `ready`/`degraded`/`failed` exactly once per launch, blocking the splash no longer than its 8s global deadline, with a restored workspace's git/skills/metrics all loaded by the time it does) is met. 3b's own criterion — the registry itself exists, settles correctly on its own schedule, and the two surfaces that used to own duplicated private state (`LlmSetupTab`, `ProviderQuotaControl`) now read it instead — is also met, verified live: opening LLM Setup or the quota widget having never visited either shows already-settled state, sourced from the same `providerStatus` map. The full criterion needs 3c: the other 13 consumer files (11 model pickers, the execution-time `getState()` resolvers) still read `customProviders`/`activeModel` directly rather than the registry.
+**Met.** 3a's own, narrower criterion (the coordinator reaches `ready`/`degraded`/`failed` exactly once per launch, blocking the splash no longer than its 8s global deadline, with a restored workspace's git/skills/metrics all loaded by the time it does) is met. 3b's own criterion — the registry itself exists, settles correctly on its own schedule, and the two surfaces that used to own duplicated private state (`LlmSetupTab`, `ProviderQuotaControl`) now read it instead — is met, verified live. 3c closes the rest: every one of the 11 model pickers and all 9 execution-time consumers (8 originally scoped, plus `InlineChat.tsx`'s submit handler, found while migrating its picker) now read `providerStatus` through `selectableProviderModels`/`useSelectableModels`/`resolveExecutionProvider` instead of `customProviders`/`activeModel` directly. Verified live across the app's surfaces (Agent tab, Skills, the canvas node inspector, the Global Explorer pane) that a signed-out managed provider's models disappear consistently everywhere at once, and a ready one's appear everywhere at once, sourced from the one registry.
 
 ### Deviations from this plan, and why (3a)
 
@@ -348,11 +348,26 @@ Immediately after startup, every application surface sees the same settled provi
 - **Lifted actions take a provider object, not an id.** `LlmSetupTab.tsx`'s `providerWithDraftSettings()` merges unsaved form edits over the store's provider before Fetch/Test; a registry action taking only an id would have silently operated on stale saved credentials instead of what's on screen. The draft merge stays in the component; `discoverModelsForProvider`/`startManagedLogin`/`logoutManaged` all take a `CustomProvider`.
 - **`toLegacyManagedStatus()` in `LlmSetupTab.tsx` was a deliberate one-commit stopgap** (commit 9), adapting a registry `ProviderStatus` entry back into `ProviderList`'s old `{state, authenticated, login, email}` prop shape so the riskiest commit (deleting the only working device-code login flow's polling hook) didn't also have to touch `ProviderList` in the same commit. Deleted the very next commit (10), once `ProviderList` read `providerStatus` directly.
 
-### Known gaps left for later (3b/3c)
+### Known gaps left for later (3b)
 
-- **3c's entire scope** — one `useSelectableModels()` hook replacing the 11 duplicated model pickers and their 5 label formats across ~8 files; killing the 6 duplicated "is my selected model still valid" fallbacks, the worst of which (`AgentTab.tsx`) rewrites the global `activeModel` as a mount side effect; routing the execution-time `getState()` resolvers (`Workspace.tsx`, `useExplorerWebSocket.ts`, `useEdgeWebSocket.ts`, `SkillsTab.tsx`) through `providerHasModelReference` instead of ad hoc string-splitting or unfiltered provider lists; and the real MCP validation route wired to the existing (currently fake) Test Connection button.
-- **The requestSeq/latestRequestSeq stale-response guard in `providerCoordinator.ts` has no test exercising true concurrent supersession** — the coordinator's own poll loop can't produce that race by itself (a provider's next poll never starts until its previous one has settled), so the guard is currently proven only by direct construction, not by a live race. It gets a real test once 3c (or later) adds a manual "refresh this provider now" entry point that can actually race a poll.
+- **The requestSeq/latestRequestSeq stale-response guard in `providerCoordinator.ts` has no test exercising true concurrent supersession** — the coordinator's own poll loop can't produce that race by itself (a provider's next poll never starts until its previous one has settled), so the guard is currently proven only by direct construction, not by a live race. Still true after 3c: no manual "refresh this provider now" entry point was added, so the guard remains unexercised by a live race — a later PR's job if one gets added.
 - **The module-global `fetchCounter` deleted from `ProviderQuotaControl/index.tsx`** had undocumented cross-instance staleness semantics; its replacement (`providerCoordinator.ts`'s own per-provider sequence guard) was verified to behave equivalently for the single-watched-provider case but the two were never tested side by side.
+
+### Deviations from this plan, and why (3c)
+
+- **A 9th execution-time consumer was found in passing, not in the original 8-site survey.** `InlineChat.tsx`'s `submit()` resolved a provider via `providerHasModelReference` + `activeProviderId` fallback and sent it straight to `inlineChatService.send()` — missed by both this session's own file survey and its stress-test review before implementation began. Found and fixed while migrating that file's picker (same commit), since it was already in scope.
+- **`McpFormTestValues` was not widened field-by-field (+`args`/`env`/`auth`) as originally sketched.** `form-utils.ts` already had `toServerConfig()`, converting the *entire* `McpFormValues` into a real `McpServerConfig` — reused directly instead of hand-duplicating that conversion. `useConnectionTest` now reads the whole form (`watch()`) rather than four scalar fields.
+- **`createMcpTools()` could not back the new `/mcp/test` route**, despite already doing a real `initialize()` + `listTools()` — it unconditionally swallows any connect failure into `{tools: [], dispose: noop}`, which a test button needs the real thrown error from. A separate `testMcpConnection()` was added to `mcpClient.ts` instead, sharing `createClient()` but not swallowing.
+- **`AgentTab.tsx`'s mount effect's dependency array still includes `customProviders`, not just `activeModel`** — killing the global `setActiveModel` write (the harmful half) didn't fix this over-broad array; a background model-discovery refresh can still re-run the effect and, in principle, overwrite a user's just-picked *local* `selectedModel` if it's transiently absent from that tab's own option list mid-refresh. Recorded as a known-remaining rough edge, not silently treated as fixed.
+- **`TaskTab.tsx` appears to have no reachable entry point in the current UI** (nothing calls `openTab({type: "task", ...})` outside the file itself) — its picker was still migrated for consistency, but this is worth a separate look: either it's genuinely dead, or something that should open it is itself missing.
+- **The "sign in to X" hint stays per-picker, not a centralized indicator.** Considered widening `StartupDegradedBanner` and rejected — it's keyed to a one-shot `startupState` with no mechanism to reappear when a provider's status changes mid-session, a different lifecycle entirely. A dedicated new persistent indicator was judged real net-new UI scope beyond this already-large PR.
+- **No "try anyway" escape hatch on a `resolveExecutionProvider` block.** The block is one-way safe (a stale `ready` status is caught by the sidecar's own eventual error; a stale `unknown`/`error` status has no such backstop — the user never gets to try). Accepted per the decision already made; a follow-up if it proves too aggressive in practice.
+
+### Known gaps left for later (3c)
+
+- **A centralized "provider needs attention" indicator**, if the per-picker duplication (11 separate "Sign in to X" placeholders) proves to be an actual UX complaint rather than a theoretical one.
+- **A "try anyway" affordance** on a `resolveExecutionProvider` block, if the one-way risk above proves too aggressive in practice.
+- **Whether `TaskTab.tsx` is genuinely reachable** — investigate whether something should open a `"task"` tab and doesn't, or whether the type/component should be removed.
 
 ## PR 4 — Shared sidecar agent protocol
 

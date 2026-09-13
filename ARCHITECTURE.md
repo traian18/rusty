@@ -48,7 +48,11 @@ Current violations, recorded rather than hidden:
   workspace-restore block PR 3a commit 10 extracted into
   `components/shell/startupSteps.ts`'s `restoreWorkspace`, which is a
   component-adjacent module, not a slice, so this is resolved for that file.
-  `createGitSlice.ts`'s remains, targeted by PR 4/PR 5.
+  `createGitSlice.ts`'s remains -- PR 5 (Git integration/submodules,
+  done) grew this file substantially but did not resolve this
+  violation, since it was about the git.rs backend and store fields,
+  not slice/transport layering. Still unresolved, not targeted by any
+  currently-planned PR.
 - Components own agent WebSockets directly (`Workspace.tsx`'s
   `executeNode`/`socketsRef`) instead of going through a shared client.
   Targeted by PR 4 and PR 7. This is also why the `agent` tab policy declares

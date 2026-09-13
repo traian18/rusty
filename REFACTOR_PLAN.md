@@ -7,7 +7,7 @@
 - [x] PR 2 — Refactor the application shell and hide the explorer by default
 - [x] PR 3 — Add an extensible application startup procedure
 - [x] PR 4 — Complete the shared sidecar agent protocol migration
-- [ ] PR 5 — Complete Git integration, including detached HEAD and submodules
+- [x] PR 5 — Complete Git integration, including detached HEAD and submodules
 - [ ] PR 6 — Add major-language syntax highlighting and safe file handling
 - [ ] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
 - [ ] All requirement-level acceptance criteria pass
@@ -476,6 +476,30 @@ No React component constructs, sends, parses, or owns an agent WebSocket. All ag
 
 ## PR 5 — Complete Git integration and submodule support
 
+Split into **5a** (Rust backend: repository/worktree/submodule
+discovery, structured `GitError`, `-z` porcelain parsing, worktree
+containment, submodule action commands — 13 commits, **done**) and
+**5b** (frontend: types, store, and 10 consumer migrations plus UI —
+12 commits, **done**). Full commit-by-commit detail lives in the PR 5
+plan (`there-is-a-refactor-plan-md-virtual-heron.md`); this section
+just closes out the checklist below against what actually landed.
+
+One deliberate scope reduction from the plan below, decided during
+implementation: the frontend checklist's "replace the single global
+`gitStatus`" is only partially done. `repositories`/`statusByRepositoryId`/
+`activeRepositoryId` exist and are what `SourceControl.tsx` and the
+submodule/branch UI read, but the deprecated single-slot `gitStatus`
+was not deleted -- several call sites (an agent run finishing, a
+generic file save, canvas execution) refresh git status after an event
+with no single repository to scope to, and migrating those means
+looping over every discovered repository, a real design question
+(parallel `git status` calls after every trivial event) bigger than
+this PR's remaining budget. What did land: `GitPresenter`'s actions
+scope their post-action refresh to the actual target repository
+instead of always the workspace root, and `SourceControl.tsx` reads
+per-repository status first, falling back to the single slot. Recorded
+here as a known, deliberate gap for a future pass, not silently absent.
+
 ### Repository model
 
 ```ts
@@ -497,57 +521,57 @@ interface GitRepository {
 
 ### Backend checklist
 
-- [ ] Discover root repository metadata through Git.
-- [ ] Discover recursive submodules with `git submodule status --recursive` or an equivalent Git-aware command.
-- [ ] Support repositories represented by `.git` directories and `.git` files.
-- [ ] Support linked worktrees where present.
-- [ ] Remove the depth-limited filesystem scan as the source of truth.
-- [ ] Return explicit branch, detached, and unborn HEAD states.
-- [ ] Include `HEAD` explicitly in history traversal alongside refs.
-- [ ] Distinguish a valid repository with no commits from a failed Git command.
-- [ ] Parse status using NUL-delimited porcelain output.
-- [ ] Correctly handle spaces, Unicode, renames, copies, conflicts, and ignored path edge cases.
-- [ ] Report submodule state separately: uninitialized, modified worktree, untracked content, and changed gitlink.
-- [ ] Scope every Git command to an explicit repository.
-- [ ] Return structured errors with operation, repository, exit code, and stderr.
-- [ ] Validate file operations remain inside the selected worktree.
-- [ ] Correctly list files for root commits.
+- [x] Discover root repository metadata through Git. (`discover_repository`, 5a #4)
+- [x] Discover recursive submodules with `git submodule status --recursive` or an equivalent Git-aware command. (`discover_submodules`, 5a #5)
+- [x] Support repositories represented by `.git` directories and `.git` files. (`discover_repository`'s `--git-dir` resolution needs no special-casing for either)
+- [x] Support linked worktrees where present. (`discover_linked_worktrees`, `git worktree list --porcelain`, 5a #4)
+- [x] Remove the depth-limited filesystem scan as the source of truth. (`git_scan_subprojects`/`scan_git_subdirs` deleted, 5b #16)
+- [x] Return explicit branch, detached, and unborn HEAD states. (`GitHeadState`, 5a #4)
+- [x] Include `HEAD` explicitly in history traversal alongside refs. (already satisfied by `git log --all`; documented, no code change, 5a #9)
+- [x] Distinguish a valid repository with no commits from a failed Git command. (`GitHeadState.mode === "unborn"` vs. a `GitError`, 5a #4)
+- [x] Parse status using NUL-delimited porcelain output. (`parse_status_z`, `--porcelain=v1 -z`, 5a #7)
+- [x] Correctly handle spaces, Unicode, renames, copies, conflicts, and ignored path edge cases. (5a #7; conflicts already handled pre-PR-5)
+- [x] Report submodule state separately: uninitialized, modified worktree, untracked content, and changed gitlink. (`SubmoduleState`, `classify_submodule_state`, 5a #11)
+- [x] Scope every Git command to an explicit repository. (every command already took `root_dir`; PR 5 added the discovery/validation layer on top)
+- [x] Return structured errors with operation, repository, exit code, and stderr. (`GitError` + `run_git`, 5a #2-3)
+- [x] Validate file operations remain inside the selected worktree. (`validate_path_in_worktree`, 5a #10)
+- [x] Correctly list files for root commits. (`--root` added to `diff-tree`, 5a #8)
 
 ### Frontend checklist
 
-- [ ] Replace the single global `gitStatus` with repository descriptors and `statusByRepositoryId`.
-- [ ] Add an explicit `activeRepositoryId`.
-- [ ] Display repository kind and path in the repository selector.
-- [ ] Display detached and unborn HEAD states correctly.
-- [ ] Run status, branch, history, diff, blame, commit, fetch, pull, push, stash, switch, reset, and revert against the selected repository.
-- [ ] Disable branch-only operations while detached and explain why.
-- [ ] Add initialize-submodule action.
-- [ ] Add update-submodule action.
-- [ ] Add sync-submodule action.
-- [ ] Allow a submodule repository to be selected and opened.
-- [ ] Allow the parent gitlink to be staged after a submodule commit.
-- [ ] Refresh both child and parent status after a submodule HEAD change.
-- [ ] Include repository identity in Git history and diff tab identities.
+- [x] Replace the single global `gitStatus` with repository descriptors and `statusByRepositoryId`. (added, 5b #15; **not fully replaced** -- see the scope-reduction note above)
+- [x] Add an explicit `activeRepositoryId`. (5b #15-16)
+- [x] Display repository kind and path in the repository selector. (5b #23)
+- [x] Display detached and unborn HEAD states correctly. (`formatHeadLabel`, 5b #18/#22)
+- [x] Run status, branch, history, diff, blame, commit, fetch, pull, push, stash, switch, reset, and revert against the selected repository. (5b #16-20; `stash`/`switch`/`reset`/`revert` already took an explicit `rootDir` pre-PR-5 and needed no change)
+- [x] Disable branch-only operations while detached and explain why. (5b #22)
+- [x] Add initialize-submodule action. (5b #23)
+- [x] Add update-submodule action. (5b #23)
+- [x] Add sync-submodule action. (5b #23)
+- [x] Allow a submodule repository to be selected and opened. (5b #16/#23 -- the repository selector lists every discovered submodule)
+- [x] Allow the parent gitlink to be staged after a submodule commit. (needed no new UI or command -- confirmed the existing stage-file action already handles it, 5a #13/5b #23)
+- [x] Refresh both child and parent status after a submodule HEAD change. (5b #24)
+- [x] Include repository identity in Git history and diff tab identities. (already true pre-PR-5; pinned with a submodule-specific regression test, 5b #25)
 
 ### Git fixture tests
 
-- [ ] Normal branch repository.
-- [ ] Unborn repository.
-- [ ] Detached `HEAD` whose commit is not referenced by a branch.
-- [ ] Initialized submodule.
-- [ ] Uninitialized submodule.
-- [ ] Nested submodules.
-- [ ] `.git` file and linked-worktree repository.
-- [ ] Filenames containing spaces and Unicode.
-- [ ] Renamed and copied files.
-- [ ] Root commit file listing.
-- [ ] Dirty submodule and modified parent gitlink.
-- [ ] Repository without a remote.
-- [ ] Branch without an upstream.
+- [x] Normal branch repository.
+- [x] Unborn repository.
+- [x] Detached `HEAD` whose commit is not referenced by a branch.
+- [x] Initialized submodule.
+- [x] Uninitialized submodule.
+- [x] Nested submodules.
+- [x] `.git` file and linked-worktree repository.
+- [x] Filenames containing spaces and Unicode.
+- [x] Renamed and copied files.
+- [x] Root commit file listing.
+- [x] Dirty submodule and modified parent gitlink.
+- [x] Repository without a remote.
+- [x] Branch without an upstream.
 
 ### Completion criteria
 
-Detached history includes the checked-out commit, empty repositories are represented correctly, and supported Git operations work consistently for root repositories and recursive submodules.
+Detached history includes the checked-out commit, empty repositories are represented correctly, and supported Git operations work consistently for root repositories and recursive submodules. **Met**, with the one recorded exception above (the deprecated single-slot `gitStatus` still exists as a fallback for a handful of workspace-wide, non-repository-scoped refresh sites).
 
 ## PR 6 — Major-language file support
 

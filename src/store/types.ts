@@ -121,10 +121,16 @@ export interface DevLog {
   timestamp: string;
 }
 
+/**
+ * Unified with the previously-drifted copy in components/git/GitActions.ts
+ * (REFACTOR_PLAN.md PR 5b commit 14) -- that file now re-exports this one
+ * instead of declaring its own. "renamed" and "copied" both come from
+ * git.rs's `-z` status parser (PR 5a commit 7); "copied" is new there.
+ */
 export interface GitFileStatus {
   path: string;
   name: string;
-  status_type: "modified" | "added" | "deleted" | "untracked";
+  status_type: "modified" | "added" | "deleted" | "untracked" | "renamed" | "copied";
 }
 
 export interface GitStatusResult {
@@ -132,6 +138,61 @@ export interface GitStatusResult {
   currentBranch: string;
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
+}
+
+/**
+ * Mirrors git.rs's `GitHeadState` (REFACTOR_PLAN.md PR 5a commit 4), hand-
+ * declared per this file's existing convention (no codegen) -- see
+ * createGitSlice.ts for the snake_case-wire-to-camelCase-JS field mapping.
+ * `mode` is `"branch"`, `"detached"`, or `"unborn"`; `branch` may still be
+ * set when `mode === "unborn"` (a freshly `git init`-ed repo already points
+ * HEAD at a named branch before the first commit exists), so the two are
+ * independent signals, not mutually exclusive.
+ */
+export interface GitHeadState {
+  mode: "branch" | "detached" | "unborn";
+  branch: string | null;
+  oid: string | null;
+}
+
+/** Mirrors git.rs's `SubmoduleState` (PR 5a commit 11). */
+export interface SubmoduleState {
+  changedGitlink: boolean;
+  modifiedWorktree: boolean;
+  untrackedContent: boolean;
+}
+
+/**
+ * A discovered Git repository -- the opened workspace root, or one of its
+ * linked worktrees/submodules (PR 5a commits 4-5). `id` is the canonicalized
+ * `worktreePath`, the same convention `src/tabs/identity.ts`'s
+ * `canonicalizeFilePath` already uses for tab identity -- not a hash.
+ */
+export interface GitRepository {
+  id: string;
+  worktreePath: string;
+  gitDir: string;
+  kind: "workspace" | "worktree" | "submodule";
+  parentId: string | null;
+  submodulePath: string | null;
+  initialized: boolean;
+  head: GitHeadState;
+  /** Only present for an initialized `kind: "submodule"` entry. */
+  submoduleState: SubmoduleState | null;
+}
+
+/**
+ * Mirrors git.rs's `GitError` (PR 5a commit 2), the structured error every
+ * git.rs command now rejects with instead of a bare string. Frontend call
+ * sites should read `.message` for display (see gitErrors.ts's
+ * `gitErrorMessage` helper) rather than stringifying the whole object.
+ */
+export interface GitError {
+  operation: string;
+  repository: string;
+  exitCode: number | null;
+  stderr: string;
+  message: string;
 }
 
 

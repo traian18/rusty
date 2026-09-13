@@ -1,8 +1,8 @@
-export interface GitFileStatus {
-  path: string;
-  name: string;
-  status_type: "modified" | "added" | "deleted" | "untracked" | "renamed";
-}
+// Re-exported from the single shared definition (REFACTOR_PLAN.md PR 5b
+// commit 14) -- this file used to declare its own copy that had drifted
+// from src/store/types.ts's (this one had "renamed", that one didn't;
+// neither had "copied").
+export type { GitFileStatus } from "../../store/types";
 
 /**
  * Git Actions Interface

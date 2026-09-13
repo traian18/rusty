@@ -6,6 +6,7 @@ import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { gitErrorMessage } from "./git/gitErrors";
 import { formatHeadLabel } from "./git/gitHeadLabel";
+import type { TabOfType } from "../tabs/types";
 
 interface GitCommitInfo {
   hash: string;
@@ -28,7 +29,7 @@ interface parsedDecoration {
  * Renders a visual log/graph of recent commits in the active Git repository.
  * Highlights unpushed (outgoing) commits and parses branch/tag decorations as badges.
  */
-export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
+export const GitHistoryTabContent: React.FC<{ tab: TabOfType<"git-history"> }> = ({ tab }) => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   // Falls back to the workspace root for the repo-wide graph opened before
   // subproject selection existed.
@@ -251,8 +252,8 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   const unpushedCommitsCount = commits.filter((c) => c.is_unpushed).length;
 
-  const isFileHistory = Boolean(tab?.path);
-  const fileBasename = isFileHistory ? tab.path.split(/[/\\]/).pop() || tab.path : "";
+  const isFileHistory = Boolean(tab.path);
+  const fileBasename = tab.path ? tab.path.split(/[/\\]/).pop() || tab.path : "";
 
   return (
     <div className="w-full h-full flex flex-col bg-[var(--bg-app)] font-sans text-xs select-none text-[var(--text-normal)]">

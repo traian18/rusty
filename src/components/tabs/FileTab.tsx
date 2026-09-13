@@ -16,6 +16,7 @@ import { InlineChatEditorContext } from "../../services/inlineChatService";
 import { createMonacoEditorOptions } from "../../editor/monacoOptions";
 import { resolveRepositoryForPath } from "../git/resolveRepositoryForPath";
 import { UnsupportedFilePreview, formatFileSize } from "./UnsupportedFilePreview";
+import type { TabOfType } from "../../tabs/types";
 
 const LSP_EDITOR_ENABLED = false;
 const DEFINITION_MENU_WIDTH = 360;
@@ -39,7 +40,7 @@ loader.init().then((monaco) => {
 });
 
 interface FileTabProps {
-  tab: any;
+  tab: TabOfType<"file">;
   isActive: boolean;
 }
 

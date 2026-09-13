@@ -22,6 +22,7 @@ import { Maximize, Link2 } from "lucide-react";
 
 import { useWorkspaceStore } from "../../../store";
 import { notify } from "../../../notificationStore";
+import type { TabOfType } from "../../../tabs/types";
 import { SidePane } from "../../sidepane/SidePane";
 import { ReconciliationGraphPane } from "../../sidepane/ReconciliationGraphPane";
 import { ContextNode } from "../../nodes/ContextNode";
@@ -68,7 +69,7 @@ const edgeTypes = {};
 /* ------------------------------------------------------------------ */
 
 interface RustyTabProps {
-  tab: { id: string; title: string };
+  tab: TabOfType<"canvas">;
   onExecuteNode: (nodeId: string) => void;
   onStopExecution: (nodeId: string) => void;
 }

@@ -12,11 +12,12 @@ import { Chat } from "../ui/Chat";
 import { ChatInput } from "../ui/ChatInput";
 import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { createMonacoDiffOptions } from "../../editor/monacoOptions";
+import type { TabOfType } from "../../tabs/types";
 
 const EMPTY_ARRAY: any[] = [];
 
 interface TaskTabProps {
-  tab: any;
+  tab: TabOfType<"task">;
   onExecuteNode: (nodeId: string, customPrompt?: string) => void;
   onStopExecution: (nodeId: string) => void;
   isActive: boolean;

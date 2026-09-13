@@ -15,9 +15,10 @@ import { agentChatService, AgentChatRun } from "../../services/agentChatService"
 import { agentHarnessClient } from "../../services/agentHarnessClient";
 import { registerTabStop, unregisterTabStop } from "../../tabs/tabStopRegistry";
 import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
+import type { TabOfType } from "../../tabs/types";
 
 interface AgentTabProps {
-  tab: any;
+  tab: TabOfType<"agent">;
 }
 
 interface SavedChat {

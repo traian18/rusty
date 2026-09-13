@@ -8,9 +8,10 @@ import { useDiffViewMode } from "../../hooks/useDiffViewMode";
 import { DiffViewToggle } from "../ui/DiffViewToggle";
 import { createMonacoDiffOptions } from "../../editor/monacoOptions";
 import { gitErrorMessage } from "../git/gitErrors";
+import type { TabOfType } from "../../tabs/types";
 
 interface GitDiffTabProps {
-  tab: any;
+  tab: TabOfType<"git-diff">;
   isActive: boolean;
 }
 

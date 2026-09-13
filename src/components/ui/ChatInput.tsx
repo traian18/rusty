@@ -4,6 +4,11 @@ import { useWorkspaceStore } from "../../store";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { searchService } from "../../services/searchService";
 import styles from "./ChatInput.module.css";
+// Moved to shared/agent-protocol/rpc.ts (PR 4c) so both the client and the
+// sidecar share one definition; re-exported here unchanged so existing
+// importers of this module are unaffected.
+export type { AgentQuestion } from "../../../shared/agent-protocol";
+import type { AgentQuestion } from "../../../shared/agent-protocol";
 
 interface ChatInputProps {
   value: string;
@@ -15,12 +20,6 @@ interface ChatInputProps {
   onStop?: () => void;
   agentQuestion?: AgentQuestion | null;
   onAgentQuestionAnswer?: (answer: string) => void;
-}
-
-export interface AgentQuestion {
-  requestId: string;
-  question: string;
-  options: Array<{ label: string; description?: string }>;
 }
 
 interface FileItem {

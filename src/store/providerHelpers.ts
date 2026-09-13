@@ -1,6 +1,28 @@
-import type { CustomProvider, ProviderModel, ReasoningEffort } from "./types";
+import type { CustomProvider, ProviderModel, ProviderStatus, ReasoningEffort } from "./types";
+import { providerStatusOrUnknown } from "../integrations/registryTypes";
 
 const REASONING_VARIANT_SEPARATOR = "::reasoning=";
+
+/**
+ * The managed-auth provider predicates (REFACTOR_PLAN.md PR 3b commit 10)
+ * -- previously duplicated verbatim in both LlmSetupTab.tsx and
+ * ProviderList.tsx. One copy here, imported by both.
+ */
+export function isCopilotProvider(provider: CustomProvider): boolean {
+  return provider.transport === "github-copilot-sdk" || provider.id === "github-copilot";
+}
+
+export function isCodexProvider(provider: CustomProvider): boolean {
+  return provider.transport === "openai-codex-app-server" || provider.id === "openai-codex";
+}
+
+export function isClaudeCodeProvider(provider: CustomProvider): boolean {
+  return provider.transport === "anthropic-claude-agent-sdk" || provider.id === "anthropic-claude-code";
+}
+
+export function isManagedAuthProvider(provider: CustomProvider): boolean {
+  return isCopilotProvider(provider) || isCodexProvider(provider) || isClaudeCodeProvider(provider);
+}
 const REASONING_EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh"] as const;
 const REASONING_EFFORT_LABELS: Record<(typeof REASONING_EFFORT_ORDER)[number], string> = {
   minimal: "Minimal",
@@ -124,24 +146,45 @@ export function normalizeStoredModelReference(
  * receive credentials from the sidecar environment. Other providers must be
  * explicitly configured so untouched built-in catalogs do not leak into every
  * model dropdown.
+ *
+ * A MANAGED provider (Copilot/Codex/Claude Code) is included only once its
+ * registry status has actually settled `"ready"` -- mirrors
+ * discoveryPolicy.ts's isEligibleForDiscovery rule exactly (REFACTOR_PLAN.md
+ * PR 3c). Before this, `authType === "environment"` alone counted as
+ * "configured" regardless of whether the provider was actually signed in,
+ * so every model picker in the app showed a signed-out Copilot's stale
+ * catalog (or nothing, with no explanation) exactly like the bug 3b
+ * already fixed once for discovery/quota eligibility but never applied
+ * here.
+ *
+ * A REGULAR provider has no status-check cycle of its own
+ * (providerCoordinator.ts only ever polls the three managed provider ids)
+ * -- `providerStatusOrUnknown` reads back `{kind: "unknown"}` for one
+ * forever, so it is judged purely on authType/apiKey, exactly as before.
+ * Gating a regular provider on registry status too would permanently
+ * exclude every custom/local provider from every picker; do not "fix" that
+ * asymmetry.
  */
 export function selectableModelProviders(
   providers: CustomProvider[],
+  providerStatus: Record<string, ProviderStatus>,
   selectedProviderId: string | null,
 ): CustomProvider[] {
-  return providers.filter((provider) =>
-    provider.id === selectedProviderId
-    || provider.authType === "none"
-    || provider.authType === "environment"
-    || Boolean(provider.apiKey?.trim())
-  );
+  return providers.filter((provider) => {
+    if (provider.id === selectedProviderId) return true;
+    if (isManagedAuthProvider(provider)) {
+      return providerStatusOrUnknown(providerStatus, provider.id).kind === "ready";
+    }
+    return provider.authType === "none" || Boolean(provider.apiKey?.trim());
+  });
 }
 
 export function selectableProviderModels(
   providers: CustomProvider[],
+  providerStatus: Record<string, ProviderStatus>,
   selectedProviderId: string | null,
 ): Array<{ provider: CustomProvider; model: ProviderModel }> {
-  return selectableModelProviders(providers, selectedProviderId).flatMap((provider) =>
+  return selectableModelProviders(providers, providerStatus, selectedProviderId).flatMap((provider) =>
     provider.models
       .filter((model) => model.supported !== false)
       .flatMap(providerModelVariants)

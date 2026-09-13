@@ -49,7 +49,7 @@ import {
   negotiateProtocol,
   parseAgentMessage,
   unwrapEnvelope,
-} from "../../shared/agentProtocol";
+} from "../../shared/agent-protocol";
 
 // Services
 import { 
@@ -63,17 +63,18 @@ import {
 // Capabilities
 import { executeNode } from "./capabilities/executeNode";
 import { stopPiAgentRun } from "./services/piAgentChat";
-import { globalExplore } from "./capabilities/globalExplore";
-import { reconciliateEdge } from "./capabilities/reconciliateEdge";
-import { reconciliateGraph } from "./capabilities/reconciliateGraph";
+import { globalExplore, stopGlobalExploration } from "./capabilities/globalExplore";
+import { reconciliateEdge, stopEdgeReconciliation } from "./capabilities/reconciliateEdge";
+import { reconciliateGraph, stopGraphReconciliation } from "./capabilities/reconciliateGraph";
 import { agentChat, stopAgentChatDelegations } from "./capabilities/agentChat";
-import { generateSkill } from "./capabilities/generateSkill";
+import { generateSkill, stopSkillGeneration } from "./capabilities/generateSkill";
 import { inlineChat } from "./capabilities/inlineChat";
 import { generateTaskNodes, stopTaskNodeGeneration } from "./capabilities/generateTaskNodes";
-import { testBuild } from "./capabilities/testBuild";
+import { testBuild, stopTestBuild } from "./capabilities/testBuild";
 import { stopCommandsForSession } from "./services/commandExecution";
 import { clearCommandSession } from "./services/commandPermissions";
 import { resolveHarness } from "./services/harness";
+import { testMcpConnection } from "./services/mcpClient";
 import {
   getCopilotConnectionStatus,
   logoutCopilot,
@@ -197,6 +198,22 @@ app.post("/llm/quota", async (req, res) => {
   } catch (err: any) {
     console.error("LLM quota discovery error:", err?.message || err);
     res.status(502).json({ error: err?.message || "Failed to fetch provider quota." });
+  }
+});
+
+// A real connectivity test for MCP's "Test Connection" button
+// (REFACTOR_PLAN.md PR 3c) -- on demand only, never a startup step. Reuses
+// mcpClient.ts's own connect/initialize/listTools/dispose sequence, via
+// testMcpConnection (deliberately not createMcpTools, which swallows a
+// connect failure into a silent zero-tools success).
+app.post("/mcp/test", async (req, res) => {
+  try {
+    const server = req.body?.server || {};
+    const result = await testMcpConnection(server);
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    console.error("MCP connection test error:", err?.message || err);
+    res.status(502).json({ error: err?.message || "MCP connection test failed." });
   }
 });
 
@@ -450,12 +467,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       enableProtocolConnection(ws, connectionId, selectedVersion);
       return;
     }
-    const data: any = parsedMessage.kind === "modern"
-      ? unwrapEnvelope(parsedMessage.value)
-      : parsedMessage.value;
-    if (parsedMessage.kind === "legacy") {
-      console.warn(`WebSocket [Protocol] Legacy message received: ${String(data.type || "unknown")}`);
-    }
+    const data: any = unwrapEnvelope(parsedMessage.value);
 
     console.log(`WebSocket [Server] Received message type: ${data.type}`);
 
@@ -500,18 +512,41 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       } else if (data.type === "inline_chat_stop") {
         const stopped = await stopPiAgentRun(data.sessionId, "Inline chat stopped by user.");
         safeSend(ws, { type: "inline_chat_stopped", sessionId: data.sessionId, stopped });
+      } else if (data.type === "execute_node_stop") {
+        // Task nodes run through the same runAgentic(tabId: nodeId, ...) path
+        // as agent_chat/inline_chat, so the same activePiRuns registration
+        // (piAgentChat.ts) already exists keyed by nodeId -- this is real
+        // cancellation, not just closing the socket, mirroring the other two.
+        const stopped = await stopPiAgentRun(data.nodeId, "Stop requested by user.");
+        safeSend(ws, { type: "execute_node_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "execute_node") {
         await executeNode(ws, data);
+      } else if (data.type === "global_explore_stop") {
+        // Unlike execute_node/agent_chat/inline_chat, global_explore's
+        // runToolLoop has no activePiRuns-backed cancellation of its own --
+        // shouldAbort only polls a real per-nodeId flag (see globalExplore.ts),
+        // which this sets.
+        const stopped = stopGlobalExploration(data.nodeId);
+        safeSend(ws, { type: "global_explore_stopped", nodeId: data.nodeId, stopped });
       } else if (data.type === "global_explore") {
         await globalExplore(ws, data);
+      } else if (data.type === "reconciliate_edge_stop") {
+        const stopped = stopEdgeReconciliation(data.edgeId);
+        safeSend(ws, { type: "reconciliate_edge_stopped", edgeId: data.edgeId, stopped });
       } else if (data.type === "reconciliate_edge") {
         await reconciliateEdge(ws, data);
+      } else if (data.type === "reconciliate_graph_stop") {
+        const stopped = stopGraphReconciliation(data.tabId);
+        safeSend(ws, { type: "reconciliate_graph_stopped", tabId: data.tabId, stopped });
       } else if (data.type === "reconciliate_graph") {
         await reconciliateGraph(ws, data);
       } else if (data.type === "agent_chat") {
         await agentChat(ws, data);
       } else if (data.type === "inline_chat") {
         await inlineChat(ws, data);
+      } else if (data.type === "generate_skill_stop") {
+        const stopped = stopSkillGeneration(data.runId);
+        safeSend(ws, { type: "generate_skill_stopped", runId: data.runId, stopped });
       } else if (data.type === "generate_skill") {
         await generateSkill(ws, data);
       } else if (data.type === "generate_task_nodes") {
@@ -519,6 +554,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       } else if (data.type === "generate_task_nodes_stop") {
         const stopped = stopTaskNodeGeneration(data.requestId);
         safeSend(ws, { type: "generate_task_nodes_stopped", requestId: data.requestId, nodeId: data.nodeId, stopped });
+      } else if (data.type === "test_build_stop") {
+        const stopped = stopTestBuild(data.tabId);
+        safeSend(ws, { type: "test_build_stopped", tabId: data.tabId, stopped });
       } else if (data.type === "test_build") {
         await testBuild(ws, data);
       } else if (data.type === "command_session_close") {

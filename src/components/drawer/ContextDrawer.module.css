@@ -1,0 +1,139 @@
+/* composes the shared GPU-layer treatment that used to target the old
+   Sidebar's `.side-pane` classname directly (index.css) -- see
+   src/styles/compositing.module.css for why. */
+.drawer {
+  composes: gpuLayer from "../../styles/compositing.module.css";
+  position: relative;
+  display: flex;
+  width: var(--drawer-width);
+  min-width: 0;
+  height: 100%;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border-default);
+  background: var(--color-surface-sidebar);
+}
+
+/*
+ * Overlay at narrow shell widths: the drawer floats over the workspace
+ * instead of squeezing it. 60rem of *card* inline size (AppShell.module
+ * .css's `.surface` declares the `shell` container) -- a container query
+ * rather than a media query because it's the card's inline size that
+ * matters, not the window's; the card is inset by padding and the rail,
+ * so a viewport breakpoint would desync from it. No click-outside
+ * dismissal: in docked mode a panel that vanishes on any outside click
+ * would be hostile, and differentiating the two modes here would
+ * reintroduce the JS breakpoint detection this is meant to avoid --
+ * Escape (ContextDrawer.tsx's onDrawerKeyDown) is the only dismissal.
+ */
+@container shell (max-width: 60rem) {
+  .drawer {
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    max-width: min(80cqi, 26rem);
+    box-shadow: var(--shadow-elevated);
+  }
+}
+
+.drawerHeader {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-sidebar);
+  color: var(--color-fg-default);
+  padding: var(--space-3) var(--space-4);
+}
+
+.title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: var(--font-size-ui-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toolButton {
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-muted);
+  padding: var(--space-1);
+  cursor: pointer;
+}
+
+.toolButton:hover {
+  background: var(--color-interaction-hover);
+  color: var(--color-fg-strong);
+}
+
+.toolButton:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+}
+
+/*
+ * Not scrollable itself: SourceControl manages its own height and internal
+ * scrolling (`h-full overflow-hidden`), so scrolling here too would double
+ * it. .explorerContent below is the one that actually scrolls.
+ */
+.drawerBody {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.explorerContent {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.empty {
+  padding: 2rem 0;
+  color: var(--color-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: var(--font-size-ui-xs);
+  line-height: var(--line-height-ui);
+  text-align: center;
+}
+
+.resizer {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 0.25rem;
+  cursor: col-resize;
+  transition: width var(--motion-fast), background-color var(--motion-fast);
+}
+
+.resizer:hover {
+  width: 0.375rem;
+  background: color-mix(in srgb, var(--color-primary) 50%, transparent);
+}
+
+.resizer:active {
+  background: var(--color-primary);
+}
+
+.resizer:focus-visible {
+  width: 0.375rem;
+  background: var(--color-primary);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

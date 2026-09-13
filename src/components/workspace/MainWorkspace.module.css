@@ -1,0 +1,21 @@
+/*
+ * Flat: border/radius/shadow now live once, on the shell's `.surface`
+ * (AppShell.module.css) that this and ContextDrawer both sit inside.
+ *
+ * Composes the shared GPU-layer treatment that used to target Workspace
+ * .tsx's inner `.workspace-container` div directly by classname (index
+ * .css). This wrapper now visually surrounds that div, so compositing it
+ * here supersedes compositing the div itself -- REFACTOR_PLAN.md PR 2
+ * commit 15 drops `.workspace-container` from Workspace.tsx accordingly.
+ */
+.workspace {
+  composes: gpuLayer from "../../styles/compositing.module.css";
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-editor-background);
+}

@@ -53,6 +53,3 @@ export const EMPTY_FORM_VALUES: McpFormValues = {
   maxRetries: 3,
   retryDelay: 1000,
 };
-
-/** Hard cap for HTTP probe timeouts to avoid excessive waits. */
-export const MAX_PROBE_TIMEOUT = 8000;

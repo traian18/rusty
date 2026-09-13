@@ -10,7 +10,7 @@ import React from "react";
 import { Sparkles, Octagon } from "lucide-react";
 import { CustomSelect } from "../../CustomSelect";
 import { TokenBadge } from "../../ui/TokenBadge/TokenBadge";
-import { selectableProviderModels } from "../../../store/providerHelpers";
+import { useSelectableModels } from "../../../hooks/useSelectableModels";
 import { useWorkspaceStore } from "../../../store";
 import type { TokenUsageLike } from "../hooks/useNodeUsage";
 
@@ -44,13 +44,16 @@ export const SidePaneFooter: React.FC<SidePaneFooterProps> = ({
   onExecute,
   onStop,
 }) => {
-  const modelOptions = selectableProviderModels(
+  // Read directly rather than threading a new prop through SidePane.tsx --
+  // this component already imports useWorkspaceStore for its imperative
+  // updateTaskNode call below, so a selector hook here is consistent with
+  // that, not a new pattern (REFACTOR_PLAN.md PR 3c).
+  const providerStatus = useWorkspaceStore((s) => s.providerStatus);
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
     customProviders,
-    activeCustomProviderId
-  ).map(({ model }) => ({
-    id: model.id,
-    name: model.name,
-  }));
+    providerStatus,
+    activeCustomProviderId,
+  );
 
   return (
     <div className="p-3 border-t border-[var(--border-color)] bg-[var(--bg-sidebar)]/20 flex items-center justify-between gap-3">
@@ -76,7 +79,9 @@ export const SidePaneFooter: React.FC<SidePaneFooterProps> = ({
             updateTaskNode(selectedNode.id, { model: val });
           }}
           options={modelOptions}
-          placeholder="Select model"
+          placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+            ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+            : "Select model"}
           className="w-36"
         />
       </div>

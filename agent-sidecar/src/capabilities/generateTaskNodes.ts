@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import { safeSend } from "../services/websocket";
 import { EmptyLlmResponseError } from "../services/llmRuntime";
 import { resolveHarness } from "../services/harness";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import {
   buildTaskGenerationQuery,
   TASK_GENERATION_SYSTEM_PROMPT,
@@ -25,6 +26,15 @@ export function stopTaskNodeGeneration(requestId: string): boolean {
 
 export async function generateTaskNodes(ws: WebSocket, data: any): Promise<void> {
   const { requestId, nodeId, model, customProvider } = data;
+
+  try {
+    requireString(requestId, "requestId");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "generate_task_nodes_error", requestId, nodeId, error: error.message });
+    return;
+  }
+
   const abortController = new AbortController();
   activeTaskGenerations.set(requestId, abortController);
   try {
@@ -115,8 +125,17 @@ export async function generateTaskNodes(ws: WebSocket, data: any): Promise<void>
       }
     }
   } catch (error: any) {
+    // generate_task_nodes_stopped is owned exclusively by server.ts's
+    // immediate ack to a generate_task_nodes_stop request ({requestId,
+    // nodeId, stopped}) -- this used to ALSO emit generate_task_nodes_stopped
+    // from here with a different shape ({requestId, nodeId, error}) once the
+    // aborted signal unwound into this catch block, so a client would
+    // receive two events sharing one type name but incompatible fields.
+    // Settling as generate_task_nodes_error uniformly (whether the cause was
+    // a real failure or a user-requested stop) mirrors how agent_chat/
+    // inline_chat already report a stopped run's own settlement.
     safeSend(ws, {
-      type: abortController.signal.aborted ? "generate_task_nodes_stopped" : "generate_task_nodes_error",
+      type: "generate_task_nodes_error",
       requestId,
       nodeId,
       error: abortController.signal.aborted ? "Task generation stopped." : error?.message || String(error),

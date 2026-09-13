@@ -6,7 +6,7 @@ import { Chat } from "../../ui/Chat";
 import { AgentQuestion, ChatInput } from "../../ui/ChatInput";
 import type { SubagentActivity } from "../../ui/Chat";
 import type { GeneratedContextDraft, GeneratedTaskDraft, TaskGenerationFailure } from "../useExplorerWebSocket";
-import type { GeneratedContextNodeSpec, GeneratedTaskNodeSpec } from "../../../store";
+import type { CustomProvider, GeneratedContextNodeSpec, GeneratedTaskNodeSpec } from "../../../store";
 
 interface ExplorerChatContentProps {
   selectedNode: any;
@@ -35,6 +35,7 @@ interface ExplorerChatContentProps {
   exploreModel: string;
   summarizeModel: string;
   allAvailableModels: { id: string; name: string }[];
+  unauthenticatedProviders: CustomProvider[];
   subagents: SubagentActivity[];
   agentQuestion: AgentQuestion | null;
   handleAgentQuestionAnswer: (answer: string) => void;
@@ -66,6 +67,7 @@ export const ExplorerChatContent: React.FC<ExplorerChatContentProps> = ({
   exploreModel,
   summarizeModel,
   allAvailableModels,
+  unauthenticatedProviders,
   subagents,
   agentQuestion,
   handleAgentQuestionAnswer,
@@ -74,6 +76,9 @@ export const ExplorerChatContent: React.FC<ExplorerChatContentProps> = ({
     (state) => state.globalChatHistory[selectedNode?.id || ""] || EMPTY_ARRAY
   );
   const updateNode = useWorkspaceStore((state) => state.updateTaskNode);
+  const signInHint = allAvailableModels.length === 0 && unauthenticatedProviders.length > 0
+    ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+    : null;
   const taskTitlesByKey = new Map(generatedTaskDraft.map((task) => [task.key, task.title]));
   const [isCreatingNodes, setIsCreatingNodes] = React.useState(false);
   const isCreatingNodesRef = React.useRef(false);
@@ -131,7 +136,7 @@ export const ExplorerChatContent: React.FC<ExplorerChatContentProps> = ({
             value={exploreModel}
             onChange={(val) => updateNode(selectedNode.id, { exploreModel: val })}
             options={allAvailableModels}
-            placeholder={allAvailableModels.length === 0 ? (exploreModel || "None") : "Chat model"}
+            placeholder={signInHint || (allAvailableModels.length === 0 ? (exploreModel || "None") : "Chat model")}
             className="flex-1 min-w-0 nodrag nopan"
             buttonClassName="w-full flex items-center justify-between bg-[var(--bg-app)] text-[var(--text-light)] border border-[var(--border-color)] focus:border-[var(--color-status-danger-border)] rounded px-1.5 py-1 outline-none cursor-pointer text-left transition-all hover:border-[var(--color-status-danger-border)] text-[10px] font-mono"
           />
@@ -142,7 +147,7 @@ export const ExplorerChatContent: React.FC<ExplorerChatContentProps> = ({
             value={summarizeModel}
             onChange={(val) => updateNode(selectedNode.id, { summarizeModel: val })}
             options={allAvailableModels}
-            placeholder={allAvailableModels.length === 0 ? (summarizeModel || "None") : "Summ model"}
+            placeholder={signInHint || (allAvailableModels.length === 0 ? (summarizeModel || "None") : "Summ model")}
             className="flex-1 min-w-0 nodrag nopan"
             buttonClassName="w-full flex items-center justify-between bg-[var(--bg-app)] text-[var(--text-light)] border border-[var(--border-color)] focus:border-[var(--color-status-warning-border)] rounded px-1.5 py-1 outline-none cursor-pointer text-left transition-all hover:border-[var(--color-status-warning-border)] text-[10px] font-mono"
           />
@@ -191,7 +196,7 @@ export const ExplorerChatContent: React.FC<ExplorerChatContentProps> = ({
                   value={taskGenerationModel}
                   onChange={(val) => updateNode(selectedNode.id, { taskGenerationModel: val })}
                   options={allAvailableModels}
-                  placeholder="Task model"
+                  placeholder={signInHint || "Task model"}
                   className="flex-1 min-w-0 nodrag nopan"
                   buttonClassName="w-full flex items-center justify-between bg-[var(--bg-app)] text-[var(--text-light)] border border-[var(--border-color)] focus:border-[var(--color-status-info-border)] rounded px-2 py-1.5 outline-none cursor-pointer text-left transition-all hover:border-[var(--color-status-info-border)] text-[10px] font-mono"
                 />

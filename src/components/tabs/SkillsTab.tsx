@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { useWorkspaceStore, Skill } from "../../store";
 import { skillsService } from "../../services/skillsService";
 import { Cpu, Plus, Trash2, Save, Wand2, Plug } from "lucide-react";
 import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
-import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
-import { SIDECAR_PORT } from "../../config/sidecar";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
+import { skillGenerationService, SkillGenerationRun } from "../../services/skillGenerationService";
 
 const AVAILABLE_TOOLS = [
   { id: "read_file", label: "Read Files" },
@@ -25,17 +25,59 @@ export const SkillsTab: React.FC = () => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const mcpServers = useWorkspaceStore((state) => state.mcpServers);
+  const activeModel = useWorkspaceStore((state) => state.activeModel);
 
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [editingSkill, setEditingSkill] = useState<Partial<Skill> | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
-  const [genModel, setGenModel] = useState<string>("");
-  const [genDescription, setGenDescription] = useState<string>("");
-  const [showSavedModal, setShowSavedModal] = useState(false);
+  // Tab UI state from store (persists across mount/unmount)
+  const skillsTabUi = useWorkspaceStore((state) => state.skillsTabUi);
+  const setSkillsTabSelectedSkillId = useWorkspaceStore(
+    (state) => state.setSkillsTabSelectedSkillId
+  );
+  const setSkillsTabEditingSkill = useWorkspaceStore(
+    (state) => state.setSkillsTabEditingSkill
+  );
+  const setSkillsTabIsGenerating = useWorkspaceStore(
+    (state) => state.setSkillsTabIsGenerating
+  );
+  const setSkillsTabGenerateError = useWorkspaceStore(
+    (state) => state.setSkillsTabGenerateError
+  );
+  const setSkillsTabGenModel = useWorkspaceStore(
+    (state) => state.setSkillsTabGenModel
+  );
+  const setSkillsTabGenDescription = useWorkspaceStore(
+    (state) => state.setSkillsTabGenDescription
+  );
+  const setSkillsTabShowSavedModal = useWorkspaceStore(
+    (state) => state.setSkillsTabShowSavedModal
+  );
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // Initialize genModel on first mount if it's empty
+  useEffect(() => {
+    if (!skillsTabUi.genModel) {
+      setSkillsTabGenModel(activeModel);
+    }
+  }, []);
+
+  const selectedSkillId = skillsTabUi.selectedSkillId;
+  const editingSkill = skillsTabUi.editingSkill;
+  const isGenerating = skillsTabUi.isGenerating;
+  const generateError = skillsTabUi.generateError;
+  const genModel = skillsTabUi.genModel;
+  const genDescription = skillsTabUi.genDescription;
+  const showSavedModal = skillsTabUi.showSavedModal;
+
+  // Shortcut functions for store setters with local names
+  const setSelectedSkillId = setSkillsTabSelectedSkillId;
+  const setEditingSkill = setSkillsTabEditingSkill;
+  const setIsGenerating = setSkillsTabIsGenerating;
+  const setGenerateError = setSkillsTabGenerateError;
+  const setGenModel = setSkillsTabGenModel;
+  const setGenDescription = setSkillsTabGenDescription;
+  const setShowSavedModal = setSkillsTabShowSavedModal;
+
+  const genRunRef = useRef<SkillGenerationRun | null>(null);
 
   const selectedSkill = skills.find((s) => s.id === selectedSkillId);
 
@@ -43,7 +85,20 @@ export const SkillsTab: React.FC = () => {
     ? JSON.stringify(editingSkill) !== JSON.stringify({ ...selectedSkill })
     : editingSkill !== null && !skills.some(s => s.id === editingSkill?.id);
 
+  // Tracks which skill's pristine copy editingSkill was last synced from.
+  // Lazily initialized to the store's own persisted selectedSkillId (not
+  // undefined/null) so that remounting this component -- which happens on
+  // every tab switch, since inactive tabs unmount -- does NOT re-run the
+  // sync below and stomp an in-progress, unsaved draft that already
+  // survived in skillsTabUi.editingSkill. The sync should only fire when
+  // the user actually picks a *different* skill (or a fresh one) while
+  // this component is mounted, not merely because a fresh component
+  // instance is observing an unchanged selection for the first time.
+  const syncedSkillIdRef = useRef<string | null>(selectedSkillId);
+
   useEffect(() => {
+    if (syncedSkillIdRef.current === selectedSkillId) return;
+    syncedSkillIdRef.current = selectedSkillId;
     if (selectedSkill) {
       setEditingSkill({ ...selectedSkill });
     } else {
@@ -137,42 +192,43 @@ export const SkillsTab: React.FC = () => {
     setGenerateError(null);
 
     try {
-      const provider = customProviders.find((p) =>
-        providerHasModelReference(p, model)
-      );
-
-      try {
-        wsRef.current = createAgentHarnessSocket();
-      } catch (err: any) {
-        console.error("Failed to construct Skills WebSocket:", err);
-        setGenerateError(`WebSocket connection failed: ${err.message || String(err)}`);
+      // Was: customProviders.find(p => providerHasModelReference(p, model)),
+      // no fallback at all -- silently sent `null` whenever `model` didn't
+      // match anything (the common case before the genModel seeding fix
+      // below existed, since genModel defaulted to "" and was never seeded
+      // from activeModel). resolveExecutionProvider both fixes the missing
+      // fallback and gates on registry status (REFACTOR_PLAN.md PR 3c).
+      const resolution = resolveExecutionProvider(customProviders, providerStatus, activeCustomProviderId, model);
+      if (!resolution.ok) {
+        setGenerateError(resolution.message);
         setIsGenerating(false);
-        notify(
-          "Sidecar Connection Error",
-          `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-          "error"
-        );
+        notify("Cannot generate", resolution.message, "error");
         return;
       }
+      const provider = resolution.provider;
 
-      wsRef.current.onopen = () => {
-        wsRef.current?.send(JSON.stringify({
-          type: "generate_skill",
+      let timedOut = false;
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        genRunRef.current?.cancel();
+        genRunRef.current = null;
+        setIsGenerating(false);
+        notify("Timeout", "Skill generation request timed out after 60 seconds.", "info");
+      }, 60000);
+
+      genRunRef.current = skillGenerationService.generate(
+        {
           model,
           description,
           workspaceRoot: rootPath,
-          customProvider: provider || null,
-        }));
-      };
-
-      wsRef.current.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "generate_skill_response") {
+          customProvider: provider,
+        },
+        {
+          onComplete: (spec) => {
+            clearTimeout(timeoutHandle);
+            if (timedOut) return;
             try {
-              const generated = typeof msg.spec === "string"
-                ? JSON.parse(msg.spec)
-                : msg.spec;
+              const generated = typeof spec === "string" ? JSON.parse(spec) : spec as any;
               setEditingSkill({
                 ...editingSkill!,
                 systemPrompt: generated.systemPrompt || "",
@@ -183,39 +239,19 @@ export const SkillsTab: React.FC = () => {
               setGenerateError("Failed to parse generated skill. Please try again.");
               notify("Parse Error", "Failed to parse generated skill specification.", "error");
             }
-            wsRef.current?.close();
+            genRunRef.current = null;
             setIsGenerating(false);
-          } else if (msg.type === "generate_skill_error") {
-            setGenerateError(msg.error || "Generation failed");
-            wsRef.current?.close();
+          },
+          onError: (message) => {
+            clearTimeout(timeoutHandle);
+            if (timedOut) return;
+            setGenerateError(message);
+            genRunRef.current = null;
             setIsGenerating(false);
-            notify("Generation Error", `Skill generation failed with error: ${msg.error}`, "error");
-          }
-        } catch (err: any) {
-          setGenerateError("Invalid response from sidecar");
-          wsRef.current?.close();
-          setIsGenerating(false);
-          notify("Sidecar Communication Error", `Error processing message from sidecar: ${err.message || String(err)}`, "error");
+            notify("Generation Error", `Skill generation failed with error: ${message}`, "error");
+          },
         }
-      };
-
-      wsRef.current.onerror = () => {
-        setGenerateError("WebSocket connection failed. Is the sidecar running?");
-        setIsGenerating(false);
-        notify(
-          "Sidecar Connection Failed",
-          `Connection to agent sidecar closed unexpectedly. Ensure agent sidecar is running on port ${SIDECAR_PORT}.`,
-          "error"
-        );
-      };
-
-      setTimeout(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.close();
-          setIsGenerating(false);
-          notify("Timeout", "Skill generation request timed out after 60 seconds.", "info");
-        }
-      }, 60000);
+      );
     } catch (err: any) {
       setGenerateError(String(err));
       setIsGenerating(false);
@@ -223,8 +259,11 @@ export const SkillsTab: React.FC = () => {
     }
   };
 
-  const modelOptions = selectableProviderModels(customProviders, activeCustomProviderId)
-    .map(({ provider, model }) => ({ id: model.id, name: `${provider.name} / ${model.name}` }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
 
   return (
     <div className="w-full h-full p-8 max-w-5xl mx-auto flex flex-col space-y-6 font-sans text-[var(--text-normal)] overflow-y-auto">
@@ -453,7 +492,9 @@ export const SkillsTab: React.FC = () => {
                         options={modelOptions}
                         value={genModel}
                         onChange={setGenModel}
-                        placeholder="Select model..."
+                        placeholder={modelOptions.length === 0 && unauthenticatedProviders.length > 0
+                          ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")}`
+                          : "Select model..."}
                       />
                     </div>
                   </div>

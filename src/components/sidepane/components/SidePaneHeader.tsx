@@ -1,6 +1,7 @@
 import React from "react";
 import { X, Maximize2, Minimize2, Sparkles, ListPlus, Octagon } from "lucide-react";
 import { CustomSelect } from "../../CustomSelect";
+import type { CustomProvider } from "../../../store";
 
 interface SidePaneHeaderProps {
   selectedNode: any;
@@ -15,6 +16,11 @@ interface SidePaneHeaderProps {
   disableGlobalActions?: boolean;
   taskGenerationModel?: string;
   taskGenerationModels?: { id: string; name: string }[];
+  /** Managed providers excluded from taskGenerationModels because their
+      registry status isn't 'ready' -- lets the picker's placeholder name
+      who needs sign-in instead of just reading "Task model" with an
+      empty list (REFACTOR_PLAN.md PR 3c). */
+  taskGenerationUnauthenticatedProviders?: CustomProvider[];
   onTaskGenerationModelChange?: (model: string) => void;
 }
 
@@ -31,8 +37,12 @@ export const SidePaneHeader: React.FC<SidePaneHeaderProps> = ({
   disableGlobalActions,
   taskGenerationModel,
   taskGenerationModels = [],
+  taskGenerationUnauthenticatedProviders = [],
   onTaskGenerationModelChange,
 }) => {
+  const taskModelPlaceholder = taskGenerationModels.length === 0 && taskGenerationUnauthenticatedProviders.length > 0
+    ? `Sign in to ${taskGenerationUnauthenticatedProviders.map((p) => p.name).join(", ")}`
+    : "Task model";
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border-color)] bg-[var(--bg-sidebar)]/40 select-none flex-shrink-0">
       <div className="flex flex-col">
@@ -52,7 +62,7 @@ export const SidePaneHeader: React.FC<SidePaneHeaderProps> = ({
               value={taskGenerationModel || ""}
               onChange={(value) => onTaskGenerationModelChange?.(value)}
               options={taskGenerationModels}
-              placeholder="Task model"
+              placeholder={taskModelPlaceholder}
               className="w-36"
               direction="down"
             />

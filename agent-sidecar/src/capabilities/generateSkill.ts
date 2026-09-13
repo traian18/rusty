@@ -9,15 +9,47 @@ import { WebSocket } from "ws";
 import { safeSend } from "../services/websocket";
 import { resolveHarness } from "../services/harness";
 import { createUsageReporter } from "../services/usageBroadcast";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 
 const AVAILABLE_TOOLS = ["read_file", "write_file", "list_files", "search_codebase", "web_search", "run_command"];
 
+// generate_skill previously carried no routing id at all -- no nodeId/tabId
+// in its payload, unlike every other capability, so there was nothing to key
+// a stop message by. The envelope wrapping every message already carries a
+// real runId (PR 4a), which unwrapEnvelope spreads into `data.runId` even
+// for a capability whose own payload never defined one -- this is what
+// generate_skill_stop now cancels by, via a real AbortController (completeText
+// already threads its `signal` all the way into the actual HTTP/streaming
+// call, the same mechanism generate_task_nodes already used).
+const activeSkillGenerations = new Map<string, AbortController>();
+
+/** Real cancellation for a generate_skill run: returns whether one was active. */
+export function stopSkillGeneration(runId: string): boolean {
+  const controller = activeSkillGenerations.get(runId);
+  if (!controller) return false;
+  controller.abort();
+  activeSkillGenerations.delete(runId);
+  return true;
+}
+
 export async function generateSkill(ws: WebSocket, data: any): Promise<void> {
-  const { description, model, customProvider } = data;
+  const { description, model, customProvider, runId } = data;
+
+  try {
+    requireString(description, "description");
+    requireString(runId, "runId");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "generate_skill_error", runId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] generate_skill starting`, { model, hasCustomProvider: !!customProvider });
+  const abortController = new AbortController();
+  activeSkillGenerations.set(runId, abortController);
 
   const sendLog = (logMessage: string) => {
-    safeSend(ws, { type: "generate_skill_log", message: logMessage });
+    safeSend(ws, { type: "generate_skill_log", runId, message: logMessage });
   };
 
   try {
@@ -55,6 +87,7 @@ For a question-heavy skill (like 'grind-me'), enable all tools but emphasize ask
       userMessage: `Generate a skill for: ${description}`,
       maxTokens: 4000,
       cwd: data.workspaceRoot,
+      signal: abortController.signal,
       onUsage: data.workspaceRoot
         ? createUsageReporter(ws, {
             workspaceRoot: data.workspaceRoot,
@@ -77,6 +110,7 @@ For a question-heavy skill (like 'grind-me'), enable all tools but emphasize ask
       console.error(`WebSocket [Server] Failed to parse skill spec: ${content}`);
       safeSend(ws, {
         type: "generate_skill_error",
+        runId,
         error: "Failed to parse skill specification. Please try again."
       });
       return;
@@ -94,8 +128,11 @@ For a question-heavy skill (like 'grind-me'), enable all tools but emphasize ask
 
     sendLog("Skill generated successfully.");
 
+    // Was generate_skill_response -- not even named _complete, the one
+    // capability whose completion event didn't follow that convention.
     safeSend(ws, {
-      type: "generate_skill_response",
+      type: "generate_skill_complete",
+      runId,
       spec
     });
 
@@ -103,7 +140,10 @@ For a question-heavy skill (like 'grind-me'), enable all tools but emphasize ask
     console.error(`WebSocket [Server] generate_skill error:`, err);
     safeSend(ws, {
       type: "generate_skill_error",
+      runId,
       error: err.message || "Failed to generate skill"
     });
+  } finally {
+    activeSkillGenerations.delete(runId);
   }
 }

@@ -22,6 +22,7 @@ import { Maximize, Link2 } from "lucide-react";
 
 import { useWorkspaceStore } from "../../../store";
 import { notify } from "../../../notificationStore";
+import type { TabOfType } from "../../../tabs/types";
 import { SidePane } from "../../sidepane/SidePane";
 import { ReconciliationGraphPane } from "../../sidepane/ReconciliationGraphPane";
 import { ContextNode } from "../../nodes/ContextNode";
@@ -68,7 +69,7 @@ const edgeTypes = {};
 /* ------------------------------------------------------------------ */
 
 interface RustyTabProps {
-  tab: { id: string; title: string };
+  tab: TabOfType<"canvas">;
   onExecuteNode: (nodeId: string) => void;
   onStopExecution: (nodeId: string) => void;
 }
@@ -516,7 +517,7 @@ const RustyTabContent: React.FC<RustyTabProps> = ({ tab, onExecuteNode, onStopEx
     }
     try {
       const filePath = await canvasFileService.saveCanvas(tab.id, saveTitle);
-      useWorkspaceStore.getState().updateTabTitle(tab.id, saveTitle);
+      useWorkspaceStore.getState().updateTab(tab.id, { title: saveTitle });
       useWorkspaceStore
         .getState()
         .updateCanvasContext(tab.id, { hasBeenSaved: true });

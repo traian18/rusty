@@ -5,11 +5,17 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CustomSelect } from "../CustomSelect";
 import { notify } from "../../notificationStore";
 import { llmIntegrationService } from "../../services/llmIntegrationService";
-import type { ClaudeCodeConnectionStatus, CodexConnectionStatus, CopilotConnectionStatus } from "../../services/llmIntegrationService";
-import { providerModelVariants } from "../../store/providerHelpers";
+import {
+  isClaudeCodeProvider,
+  isCodexProvider,
+  isCopilotProvider,
+  isManagedAuthProvider as isManagedAuthProviderPredicate,
+  providerModelVariants,
+} from "../../store/providerHelpers";
+import { providerStatusOrUnknown } from "../../integrations/registryTypes";
+import { logoutManaged, startManagedLogin } from "../shell/providerCoordinator";
 import { ProviderList, selectFirstSupportedModel } from "./llmSetup/ProviderList";
 import { providerHelpText } from "./llmSetup/providerHelp";
-import { useManagedProviderStatus } from "./llmSetup/useManagedProviderStatus";
 
 const API_PROTOCOL_OPTIONS = [
   { id: "openai-completions", name: "OpenAI Chat Completions" },
@@ -32,51 +38,81 @@ export const LlmSetupTab: React.FC = () => {
   const setActiveModel = useWorkspaceStore((state) => state.setActiveModel);
   const updateProviderSettings = useWorkspaceStore((state) => state.updateProviderSettings);
   const addCustomProvider = useWorkspaceStore((state) => state.addCustomProvider);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
 
-  // Selected provider configuration state
+  // Tab UI state from store (persists across mount/unmount)
+  const llmSetupTabUi = useWorkspaceStore((state) => state.llmSetupTabUi);
+  const setLlmSetupTabApiKey = useWorkspaceStore((state) => state.setLlmSetupTabApiKey);
+  const setLlmSetupTabBaseUrl = useWorkspaceStore((state) => state.setLlmSetupTabBaseUrl);
+  const setLlmSetupTabCatalogUrl = useWorkspaceStore((state) => state.setLlmSetupTabCatalogUrl);
+  const setLlmSetupTabApiType = useWorkspaceStore((state) => state.setLlmSetupTabApiType);
+  const setLlmSetupTabAuthType = useWorkspaceStore((state) => state.setLlmSetupTabAuthType);
+  const setLlmSetupTabShowKey = useWorkspaceStore((state) => state.setLlmSetupTabShowKey);
+  const setLlmSetupTabFetchingModels = useWorkspaceStore((state) => state.setLlmSetupTabFetchingModels);
+  const setLlmSetupTabTestingConnection = useWorkspaceStore((state) => state.setLlmSetupTabTestingConnection);
+  const setLlmSetupTabConnectionStatus = useWorkspaceStore((state) => state.setLlmSetupTabConnectionStatus);
+  const setLlmSetupTabSigningOut = useWorkspaceStore((state) => state.setLlmSetupTabSigningOut);
+
+  // Shortcut names for backward compatibility with existing code
+  const apiKey = llmSetupTabUi.apiKey;
+  const baseUrl = llmSetupTabUi.baseUrl;
+  const catalogUrl = llmSetupTabUi.catalogUrl;
+  const apiType = llmSetupTabUi.apiType;
+  const authType = llmSetupTabUi.authType;
+  const showKey = llmSetupTabUi.showKey;
+  const fetchingModels = llmSetupTabUi.fetchingModels;
+  const testingConnection = llmSetupTabUi.testingConnection;
+  const connectionStatus = llmSetupTabUi.connectionStatus;
+  const signingOut = llmSetupTabUi.signingOut;
+
+  const setApiKey = setLlmSetupTabApiKey;
+  const setBaseUrl = setLlmSetupTabBaseUrl;
+  const setCatalogUrl = setLlmSetupTabCatalogUrl;
+  const setApiType = setLlmSetupTabApiType;
+  const setAuthType = setLlmSetupTabAuthType;
+  const setShowKey = setLlmSetupTabShowKey;
+  const setFetchingModels = setLlmSetupTabFetchingModels;
+  const setTestingConnection = setLlmSetupTabTestingConnection;
+  const setConnectionStatus = setLlmSetupTabConnectionStatus;
+  const setSigningOut = setLlmSetupTabSigningOut;
+
+  // Selected provider configuration state. The managed-provider predicates
+  // used to be duplicated verbatim here and in ProviderList.tsx -- both now
+  // import the one copy in store/providerHelpers.ts (REFACTOR_PLAN.md PR
+  // 3b commit 10).
   const selectedProvider = customProviders.find((p) => p.id === activeCustomProviderId);
-  const isCopilot = selectedProvider?.transport === "github-copilot-sdk" || selectedProvider?.id === "github-copilot";
-  const isCodex = selectedProvider?.transport === "openai-codex-app-server" || selectedProvider?.id === "openai-codex";
-  const isClaudeCode = selectedProvider?.transport === "anthropic-claude-agent-sdk" || selectedProvider?.id === "anthropic-claude-code";
-  const isManagedAuthProvider = isCopilot || isCodex || isClaudeCode;
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [catalogUrl, setCatalogUrl] = useState("");
-  const [apiType, setApiType] = useState("openai-completions");
-  const [authType, setAuthType] = useState<NonNullable<CustomProvider["authType"]>>("bearer");
-  const [showKey, setShowKey] = useState(false);
-  const [fetchingModels, setFetchingModels] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<Record<string, "connected" | "failed">>({});
-  const [signingOut, setSigningOut] = useState(false);
-  const copilotConnection = useManagedProviderStatus<CopilotConnectionStatus>({
-    providerId: "github-copilot",
-    loadStatus: llmIntegrationService.getCopilotStatus,
-    unavailableMessage: "Could not reach the Copilot service.",
-    updateConnectionStatus: setConnectionStatus,
-  });
-  const codexConnection = useManagedProviderStatus<CodexConnectionStatus>({
-    providerId: "openai-codex",
-    loadStatus: llmIntegrationService.getCodexStatus,
-    unavailableMessage: "Could not reach the Codex service.",
-    updateConnectionStatus: setConnectionStatus,
-  });
-  const claudeCodeConnection = useManagedProviderStatus<ClaudeCodeConnectionStatus>({
-    providerId: "anthropic-claude-code",
-    loadStatus: llmIntegrationService.getClaudeCodeStatus,
-    unavailableMessage: "Could not reach the Claude Code service.",
-    updateConnectionStatus: setConnectionStatus,
-  });
-  const { status: copilotStatus, setStatus: setCopilotStatus } = copilotConnection;
-  const { status: codexStatus, setStatus: setCodexStatus } = codexConnection;
-  const { status: claudeCodeStatus, setStatus: setClaudeCodeStatus } = claudeCodeConnection;
-  const managedStatus = isCodex ? codexStatus : isClaudeCode ? claudeCodeStatus : copilotStatus;
+  const isCopilot = Boolean(selectedProvider && isCopilotProvider(selectedProvider));
+  const isCodex = Boolean(selectedProvider && isCodexProvider(selectedProvider));
+  const isClaudeCode = Boolean(selectedProvider && isClaudeCodeProvider(selectedProvider));
+  const isManagedAuthProvider = Boolean(selectedProvider && isManagedAuthProviderPredicate(selectedProvider));
+
+  // The selected managed provider's entry, straight from the registry
+  // (REFACTOR_PLAN.md PR 3b commit 9) -- replaces three separate
+  // useManagedProviderStatus polls, each mounted only while this tab was,
+  // and each destroyed the moment the user switched tabs. The coordinator
+  // (providerCoordinator.ts) now polls all three for the life of the
+  // session, so this tab reads whatever it's already settled to instead
+  // of restarting a poll from scratch every time it mounts. ProviderList
+  // reads the whole registry itself now (commit 10), so this tab no longer
+  // needs its own per-vendor copies.
+  const managedStatus = selectedProvider ? providerStatusOrUnknown(providerStatus, selectedProvider.id) : undefined;
   const managedVendor = isCodex ? "OpenAI" : isClaudeCode ? "Anthropic" : "GitHub";
   const managedProduct = isCodex ? "Codex" : isClaudeCode ? "Claude Code" : "Copilot";
-  const managedAutoLoadRef = useRef("");
 
-  // Sync inputs with selected provider
+  // Sync inputs with selected provider.
+  //
+  // syncedProviderIdRef is lazily initialized to the store's own persisted
+  // activeCustomProviderId (not undefined/null) so remounting this tab --
+  // which happens on every switch away and back, since inactive tabs
+  // unmount -- does NOT re-run this sync and stomp an in-progress, unsaved
+  // draft that already survived in llmSetupTabUi. The sync should only
+  // fire when the user actually switches to a *different* provider while
+  // this component stays mounted, not merely because a fresh component
+  // instance is observing an unchanged selection for the first time.
+  const syncedProviderIdRef = useRef(activeCustomProviderId);
   useEffect(() => {
+    if (syncedProviderIdRef.current === activeCustomProviderId) return;
+    syncedProviderIdRef.current = activeCustomProviderId;
     if (selectedProvider) {
       setApiKey(selectedProvider.apiKey || "");
       setBaseUrl(selectedProvider.baseUrl || "");
@@ -93,6 +129,12 @@ export const LlmSetupTab: React.FC = () => {
       if (firstSupportedModel) setActiveModel(providerModelVariants(firstSupportedModel)[0].id);
     }
   }, [activeModel, selectedProvider, setActiveModel]);
+
+  // Note: the old one-shot "auto-fetch models once signed in" effect
+  // (managedAutoLoadRef) is gone -- providerCoordinator.ts's background
+  // discovery already does this the moment a managed provider's registry
+  // status settles to "ready" (REFACTOR_PLAN.md PR 3b commit 7), whether
+  // or not this tab is even open.
 
   const providerWithDraftSettings = (): CustomProvider | null => selectedProvider
     ? isManagedAuthProvider
@@ -142,11 +184,16 @@ export const LlmSetupTab: React.FC = () => {
         apiType: provider.apiType,
         authType: provider.authType,
         models,
+        // Stamps the same field the coordinator's own background
+        // discovery uses (REFACTOR_PLAN.md PR 3b commit 6/7) -- a manual
+        // fetch counts as fresh too, so the coordinator's next sweep
+        // doesn't immediately redo what the user just did by hand.
+        modelsFetchedAt: new Date().toISOString(),
       });
       if (selectableModels.length > 0 && !selectableModels.some((model) => model.id === activeModel)) {
         setActiveModel(selectableModels[0].id);
       }
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "connected" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "connected" });
       const unsupportedCount = models.length - supportedModels.length;
       notify(
         "Models refreshed",
@@ -154,7 +201,7 @@ export const LlmSetupTab: React.FC = () => {
         supportedModels.length ? "success" : "info"
       );
     } catch (err: any) {
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "failed" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "failed" });
       notify("Fetch failed", `Failed to fetch models: ${err.message}`, "error");
     } finally {
       setFetchingModels(false);
@@ -167,10 +214,10 @@ export const LlmSetupTab: React.FC = () => {
     setTestingConnection(true);
     try {
       const result = await llmIntegrationService.testConnection(provider);
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "connected" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "connected" });
       notify("Connection successful", `${provider.name} returned ${result.modelCount} models; ${result.supportedModelCount} are supported by Rusty.`, "success");
     } catch (err: any) {
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "failed" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "failed" });
       notify("Connection failed", err.message || "Could not connect to the provider.", "error");
     } finally {
       setTestingConnection(false);
@@ -178,25 +225,15 @@ export const LlmSetupTab: React.FC = () => {
   };
 
   const handleManagedLogin = async () => {
+    if (!selectedProvider) return;
     try {
-      const status = isCodex
-        ? await llmIntegrationService.startCodexLogin()
-        : isClaudeCode
-          ? await llmIntegrationService.startClaudeCodeLogin()
-          : await llmIntegrationService.startCopilotLogin();
-      if (isCodex) setCodexStatus(status as CodexConnectionStatus);
-      else if (isClaudeCode) setClaudeCodeStatus(status as ClaudeCodeConnectionStatus);
-      else setCopilotStatus(status as CopilotConnectionStatus);
+      await startManagedLogin(selectedProvider);
       notify(
         `${managedVendor} authorization`,
         isClaudeCode ? "Run claude and /login in a terminal, then refresh models here." : `Complete the ${managedProduct} sign-in flow in your browser.`,
         "info",
       );
     } catch (error: any) {
-      const failed = { state: "failed" as const, authenticated: false, message: error?.message };
-      if (isCodex) setCodexStatus(failed);
-      else if (isClaudeCode) setClaudeCodeStatus(failed);
-      else setCopilotStatus(failed);
       notify("Sign-in failed", error?.message || `Could not start ${managedVendor} authorization.`, "error");
     }
   };
@@ -205,19 +242,7 @@ export const LlmSetupTab: React.FC = () => {
     if (!selectedProvider) return;
     setSigningOut(true);
     try {
-      const status = isCodex
-        ? await llmIntegrationService.logoutCodex()
-        : isClaudeCode
-          ? await llmIntegrationService.logoutClaudeCode()
-          : await llmIntegrationService.logoutCopilot();
-      if (isCodex) setCodexStatus(status as CodexConnectionStatus);
-      else if (isClaudeCode) setClaudeCodeStatus(status as ClaudeCodeConnectionStatus);
-      else setCopilotStatus(status as CopilotConnectionStatus);
-      setConnectionStatus((current) => {
-        const next = { ...current };
-        delete next[selectedProvider.id];
-        return next;
-      });
+      await logoutManaged(selectedProvider);
       notify("Signed out", `Disconnected the ${managedVendor} account from ${managedProduct}.`, "success");
     } catch (error: any) {
       notify("Sign-out failed", error?.message || `Could not sign out of ${managedProduct}.`, "error");
@@ -255,16 +280,6 @@ export const LlmSetupTab: React.FC = () => {
       notify("Copy failed", error?.message || "Could not copy the authentication diagnostics.", "error");
     }
   };
-
-  useEffect(() => {
-    if (!managedStatus?.authenticated) {
-      managedAutoLoadRef.current = "";
-      return;
-    }
-    if (!isManagedAuthProvider || !selectedProvider || selectedProvider.models.length > 0 || managedAutoLoadRef.current === selectedProvider.id) return;
-    managedAutoLoadRef.current = selectedProvider.id;
-    void handleFetchModels();
-  }, [managedStatus?.authenticated, isManagedAuthProvider, selectedProvider?.id, selectedProvider?.models.length]);
 
   // Add Custom Provider Form State
   const [showAddCustom, setShowAddCustom] = useState(false);
@@ -321,7 +336,7 @@ export const LlmSetupTab: React.FC = () => {
     if (modelsList.length > 0) {
       setActiveModel(modelsList[0].id);
     }
-    
+
     notify("Provider added", `LLM Provider ${provName} registered successfully!`, "success");
     setProvId("");
     setProvName("");
@@ -353,9 +368,7 @@ export const LlmSetupTab: React.FC = () => {
             providers={customProviders}
             activeProviderId={activeCustomProviderId}
             connectionStatuses={connectionStatus}
-            copilotStatus={copilotStatus}
-            codexStatus={codexStatus}
-            claudeCodeStatus={claudeCodeStatus}
+            providerStatus={providerStatus}
             onSelectProvider={(provider) => {
               setActiveCustomProviderId(provider.id);
               const modelId = selectFirstSupportedModel(provider);
@@ -492,7 +505,7 @@ export const LlmSetupTab: React.FC = () => {
                     {selectedProvider.name} Settings
                   </span>
                 </div>
-                
+
                 <div className="flex items-center space-x-1 bg-[var(--bg-app)] border border-[var(--border-color)] rounded-full px-3 py-1 font-mono text-[10px] text-[var(--text-muted)]">
                   <span>ID:</span>
                   <span className="font-bold text-[var(--text-light)]">{selectedProvider.id}</span>
@@ -506,22 +519,18 @@ export const LlmSetupTab: React.FC = () => {
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex items-start gap-3">
                         <div className={`mt-0.5 h-2.5 w-2.5 flex-shrink-0 rounded-full ${
-                          managedStatus?.authenticated
+                          managedStatus?.kind === "ready"
                             ? "bg-[var(--color-status-success)]"
-                            : managedStatus?.state === "connecting"
+                            : managedStatus?.kind === "loading"
                               ? "bg-[var(--color-status-warning)] animate-pulse"
                               : "bg-[var(--text-muted)]"
                         }`} />
                         <div className="space-y-1">
                           <div className="font-mono text-xs font-bold text-[var(--text-light)]">
-                            {managedStatus?.state === "connecting"
+                            {managedStatus?.kind === "loading"
                               ? `Waiting for ${managedVendor} authorization`
-                              : managedStatus?.authenticated
-                                ? `Connected${isCodex
-                                  ? codexStatus?.email ? ` as ${codexStatus.email}` : ""
-                                  : isClaudeCode
-                                    ? claudeCodeStatus?.email ? ` as ${claudeCodeStatus.email}` : ""
-                                    : copilotStatus?.login ? ` as ${copilotStatus.login}` : ""}`
+                              : managedStatus?.kind === "ready"
+                                ? `Connected${managedStatus.account ? ` as ${managedStatus.account}` : ""}`
                                 : `${managedVendor} sign-in required`}
                           </div>
                           <p className="text-[10px] leading-relaxed text-[var(--text-muted)]">
@@ -531,23 +540,30 @@ export const LlmSetupTab: React.FC = () => {
                                 ? "Use the Anthropic account connected to Claude Code."
                               : "Use the GitHub account that owns your Copilot subscription.")}
                           </p>
-                          {isCopilot && copilotStatus?.host && (
-                            <p className="font-mono text-[9px] text-[var(--text-muted)]">{copilotStatus.host}</p>
+                          {isCopilot && managedStatus?.host && (
+                            <p className="font-mono text-[9px] text-[var(--text-muted)]">{managedStatus.host}</p>
                           )}
-                          {isCodex && codexStatus?.planType && (
-                            <p className="font-mono text-[9px] text-[var(--text-muted)]">Plan: {codexStatus.planType}</p>
-                          )}
-                          {isClaudeCode && claudeCodeStatus?.planType && (
-                            <p className="font-mono text-[9px] text-[var(--text-muted)]">Plan: {claudeCodeStatus.planType}</p>
+                          {(isCodex || isClaudeCode) && managedStatus?.planType && (
+                            <p className="font-mono text-[9px] text-[var(--text-muted)]">Plan: {managedStatus.planType}</p>
                           )}
                         </div>
                       </div>
                       <div className="flex flex-shrink-0 items-center gap-2">
-                        {managedStatus?.authenticated && (
+                        {managedStatus?.kind === "ready" && (
                           <button
                             type="button"
                             onClick={() => void handleManagedLogout()}
-                            disabled={signingOut || managedStatus?.state === "connecting"}
+                            // No `kind === "loading"` check here (unlike the
+                            // Sign In button below): this button only renders
+                            // when kind is already "ready", and the registry's
+                            // single-discriminant status can't be both at
+                            // once -- unlike the old dual-field
+                            // {authenticated, state} shape, where a
+                            // re-authenticate attempt could report
+                            // authenticated: true and state: "connecting"
+                            // simultaneously. A re-auth in progress now hides
+                            // Sign Out entirely instead of disabling it.
+                            disabled={signingOut}
                             className="whitespace-nowrap rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-3 py-2 font-mono text-[10px] font-bold text-[var(--text-normal)] transition-colors hover:border-[var(--color-status-danger)] hover:text-[var(--color-status-danger)] disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {signingOut ? "Signing out…" : "Sign Out"}
@@ -556,18 +572,18 @@ export const LlmSetupTab: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => void handleManagedLogin()}
-                          disabled={managedStatus?.state === "connecting"}
+                          disabled={managedStatus?.kind === "loading"}
                           className="whitespace-nowrap rounded-lg bg-[var(--accent-color)] px-3 py-2 font-mono text-[10px] font-bold text-[var(--color-primary-foreground)] transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {managedStatus?.state === "connecting"
+                          {managedStatus?.kind === "loading"
                             ? "Signing in…"
-                            : managedStatus?.authenticated
+                            : managedStatus?.kind === "ready"
                               ? "Re-authenticate"
                               : isClaudeCode ? "Check Claude Login" : `Sign in with ${managedVendor}`}
                         </button>
                       </div>
                     </div>
-                    {managedStatus?.state === "connecting" && managedStatus.userCode && (
+                    {managedStatus?.kind === "loading" && managedStatus.userCode && (
                       <div className="rounded-xl border border-[var(--accent-color)]/40 bg-[var(--accent-bg)]/10 p-4 text-center">
                         <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">
                           {managedVendor} device code
@@ -659,7 +675,7 @@ export const LlmSetupTab: React.FC = () => {
                       </button>
                     )}
                   </div>
-                  
+
                   <input
                     type={showKey ? "text" : "password"}
                     placeholder={
@@ -676,7 +692,7 @@ export const LlmSetupTab: React.FC = () => {
                     disabled={authType === "none"}
                     className="w-full bg-[var(--bg-app)] border border-[var(--border-color)] rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-light)] font-mono focus:outline-none focus:border-[var(--border-active)] placeholder-[var(--text-muted)]/70 shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
                   />
-                  
+
                   {(selectedProvider.id === "openai" || selectedProvider.id === "anthropic") && !apiKey && (
                     <span className="text-[10px] text-[var(--text-muted)] leading-relaxed italic block mt-1 font-mono">
                       ℹ Environment Variable configuration will be active for this provider since no custom key is provided.
@@ -696,7 +712,7 @@ export const LlmSetupTab: React.FC = () => {
                     <Globe size={13} className="text-[var(--color-secondary)]" />
                     <span>Connection Base URL</span>
                   </label>
-                  
+
                   <input
                     type="text"
                     placeholder="e.g. https://api.openai.com/v1"
@@ -770,7 +786,7 @@ export const LlmSetupTab: React.FC = () => {
                             .map((m) => ({ id: m.id, name: `${m.name} (${m.remoteId || m.id})` }))
                         : []
                     }
-                    placeholder={isManagedAuthProvider && !managedStatus?.authenticated
+                    placeholder={isManagedAuthProvider && managedStatus?.kind !== "ready"
                       ? `Sign in with ${managedVendor} to load ${managedProduct} models`
                       : "No supported models available - fetch the provider catalog"}
                   />
@@ -792,7 +808,7 @@ export const LlmSetupTab: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleFetchModels}
-                      disabled={fetchingModels || testingConnection || (isManagedAuthProvider && !managedStatus?.authenticated)}
+                      disabled={fetchingModels || testingConnection || (isManagedAuthProvider && managedStatus?.kind !== "ready")}
                       className="whitespace-nowrap border border-[var(--border-color)] hover:border-[var(--accent-color)] bg-[var(--bg-app)] hover:bg-[var(--accent-bg)]/10 text-[var(--text-normal)] hover:text-[var(--text-light)] font-mono font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
                       title="Discover and normalize the provider's model catalog"
                     >
@@ -803,7 +819,7 @@ export const LlmSetupTab: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleTestConnection}
-                      disabled={fetchingModels || testingConnection || (isManagedAuthProvider && !managedStatus?.authenticated)}
+                      disabled={fetchingModels || testingConnection || (isManagedAuthProvider && managedStatus?.kind !== "ready")}
                       className="whitespace-nowrap border border-[var(--border-color)] hover:border-[var(--color-status-success-border)] bg-[var(--bg-app)] hover:bg-[var(--color-status-success-bg)] text-[var(--text-normal)] hover:text-[var(--text-light)] font-mono font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
                     >
                       <ShieldCheck size={13} className={testingConnection ? "animate-pulse text-[var(--color-status-success)]" : ""} />

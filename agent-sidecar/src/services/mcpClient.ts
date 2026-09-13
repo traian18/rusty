@@ -404,6 +404,37 @@ function createClient(server: any): McpClient {
   return new HttpMcpClient(server); // http + sse
 }
 
+export interface McpTestResult {
+  toolCount: number;
+  tools: string[];
+}
+
+/**
+ * A real connectivity test (REFACTOR_PLAN.md PR 3c) -- connects, performs
+ * the `initialize` handshake, lists tools, and disposes. Deliberately
+ * separate from `createMcpTools`: that function's own try/catch
+ * unconditionally swallows any connect failure into `{tools: [],
+ * dispose: noop}` (see below), which is exactly right for a capability
+ * that must degrade gracefully rather than crash a run, but exactly wrong
+ * for a "Test Connection" button -- the caller needs the real thrown
+ * error (connection refused, auth failed, timeout) to show the user, not
+ * a silent "zero tools" success. This function does not swallow; on
+ * failure it throws and still closes the client in `finally`.
+ */
+export async function testMcpConnection(server: any): Promise<McpTestResult> {
+  if (server.enabled === false) {
+    throw new Error(`MCP server "${server.name || "unnamed"}" is disabled.`);
+  }
+  const client = createClient(server);
+  try {
+    await client.initialize();
+    const rawTools = await client.listTools();
+    return { toolCount: rawTools.length, tools: rawTools.map((t: any) => t.name) };
+  } finally {
+    client.close();
+  }
+}
+
 /**
  * Connect to an MCP server, perform the initialize handshake, list its tools,
  * and return LLM-compatible tool descriptors. Each tool's `execute` calls the

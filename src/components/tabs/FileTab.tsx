@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../../store";
 import { invoke } from "@tauri-apps/api/core";
 import { VfsRegistry } from "../../services/vfs";
 import { getFileTypeDetails } from "../../services/fileTypeService";
+import { getMonacoLanguageId, resolveLanguage } from "../../services/languageRegistry";
 import { themes, defineMonacoTheme } from "../../theme";
 import { Eye, FileCode2, FileSearch, GitBranch, History, Loader2, TreePine, X } from "lucide-react";
 import { LspStatus } from "../../services/lspService";
@@ -13,6 +14,11 @@ import { MarkdownRenderer } from "../ui/MarkdownRenderer";
 import { InlineChat } from "../inline-chat/InlineChat";
 import { InlineChatEditorContext } from "../../services/inlineChatService";
 import { createMonacoEditorOptions } from "../../editor/monacoOptions";
+import { resolveRepositoryForPath } from "../git/resolveRepositoryForPath";
+import { UnsupportedFilePreview, formatFileSize } from "./UnsupportedFilePreview";
+import { ImageFilePreview } from "./ImageFilePreview";
+import { isImageFile, getImageMimeType } from "../../services/imageFile";
+import type { TabOfType } from "../../tabs/types";
 
 const LSP_EDITOR_ENABLED = false;
 const DEFINITION_MENU_WIDTH = 360;
@@ -36,11 +42,11 @@ loader.init().then((monaco) => {
 });
 
 interface FileTabProps {
-  tab: any;
-  groupId: string;
+  tab: TabOfType<"file">;
+  isActive: boolean;
 }
 
-export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
+export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   const editorFontSize = useWorkspaceStore((state) => state.typographyPreferences.editorFontSize);
   const [fileContent, setFileContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -57,10 +63,29 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
     message?: string;
   } | null>(null);
   const [markdownPreview, setMarkdownPreview] = useState(false);
+  // Set only when a shebang line changes the language resolution away from
+  // the filename-only guess (REFACTOR_PLAN.md PR 6 commit 5) -- an
+  // extensionless script is the only case that can happen for, so this
+  // stays null for every other file.
+  const [shebangLanguage, setShebangLanguage] = useState<string | null>(null);
+  // check_file_open_safety's verdict for this tab's file (REFACTOR_PLAN.md
+  // PR 6 commit 8). "safe" is the default so a file already loaded before
+  // this check runs (or one the check errored on -- see the effect below)
+  // renders exactly like it did before this feature existed.
+  const [fileSafety, setFileSafety] = useState<
+    { kind: "safe" } | { kind: "binary"; sizeBytes: number } | { kind: "too_large"; sizeBytes: number }
+  >({ kind: "safe" });
+  // "Load anyway" override for a too_large file, reset per tab.path change.
+  const [forceEditableLargeFile, setForceEditableLargeFile] = useState(false);
   const [inlineChat, setInlineChat] = useState<{
     context: InlineChatEditorContext;
     position: { x: number; y: number };
   } | null>(null);
+  // Populated instead of fileContent/fileSafety when isImage is true --
+  // read_file_as_base64 handles binary bytes read_file_disk/VfsRegistry
+  // can't, and images never go through Monaco's text-editing path at all.
+  const [imagePreview, setImagePreview] = useState<{ dataUrl: string; sizeBytes: number } | null>(null);
+  const [imageLoadError, setImageLoadError] = useState<string | null>(null);
   const saveTimeoutRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<any>(null);
@@ -69,35 +94,45 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
   const inlineChatCommandRef = useRef<{ dispose: () => void } | null>(null);
   const inlineChatSessionIdRef = useRef(`inline-chat-${tab.id}-${Date.now()}`);
 
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
-  
-  const targetGroup = editorGroups.find((g) => g.id === groupId);
-  const isActive = targetGroup ? targetGroup.activeTabId === tab.id : false;
-  const isMarkdown = getFileTypeDetails(tab.key).language === "markdown";
+  const repositories = useWorkspaceStore((state) => state.repositories);
+
+  // The repository that actually owns this file (REFACTOR_PLAN.md PR 5b
+  // commit 19) -- falls back to the workspace root, the pre-PR-5 behavior,
+  // when repositories hasn't been discovered yet or the file isn't inside
+  // any discovered submodule/worktree. Computed per-render rather than
+  // stored on the tab itself: repositories is already global store state,
+  // so there's nothing to gain from threading a repoPath field through
+  // every place a file tab gets created.
+  const fileRepoPath = resolveRepositoryForPath(tab.path, repositories)?.worktreePath ?? rootPath;
+
+  const isMarkdown = getFileTypeDetails(tab.path).language === "markdown";
+  const isImage = isImageFile(tab.path);
 
   useEffect(() => {
     setMarkdownPreview(isMarkdown);
-  }, [isMarkdown, tab.key]);
+  }, [isMarkdown, tab.path]);
 
   const canvasTabId = useMemo(() => {
     const contexts = useWorkspaceStore.getState().canvasContexts;
     for (const tId in contexts) {
       const ctx = contexts[tId];
-      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.key));
+      const hasNode = ctx.nodes.some((n: any) => n.data?.modifiedFiles?.includes(tab.path));
       if (hasNode) return tId;
     }
     return undefined;
-  }, [tab.key]);
+  }, [tab.path]);
 
-  // Load Git blame details
+  // Load Git blame details. Skipped for images: blame is a per-line
+  // annotation and images have no lines -- there is nothing for the gutter
+  // to show, so there's no reason to pay for the invoke.
   useEffect(() => {
-    if (!rootPath || !tab.key) return;
+    if (!fileRepoPath || !tab.path || isImage) return;
     const fetchBlame = async () => {
       try {
-        const blameLines: any[] = await invoke("git_blame", { rootDir: rootPath, filePath: tab.key });
+        const blameLines: any[] = await invoke("git_blame", { rootDir: fileRepoPath, filePath: tab.path });
         const map: Record<number, any> = {};
         let maxLen = 5;
         blameLines.forEach((line) => {
@@ -114,15 +149,83 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
       }
     };
     fetchBlame();
-  }, [tab.key, rootPath]);
+  }, [tab.path, fileRepoPath]);
 
   // Load content on mount
   useEffect(() => {
-    const fetchFileContent = async () => {
+    setShebangLanguage(null);
+    setFileSafety({ kind: "safe" });
+    setForceEditableLargeFile(false);
+    setImagePreview(null);
+    setImageLoadError(null);
+
+    const fetchImageContent = async () => {
+      // Images skip check_file_open_safety and VfsRegistry entirely: the
+      // safety check's NUL-byte sniff would just classify them "binary"
+      // anyway (SVG being the one exception, since it's real text), and
+      // VfsRegistry.readFile expects UTF-8 text, which would corrupt raw
+      // image bytes rather than error cleanly on them.
       try {
-        console.log(`FileTab reading VFS path: ${tab.key}`);
-        const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.key);
+        const base64: string = await invoke("read_file_as_base64", { path: tab.path });
+        const mime = getImageMimeType(tab.path);
+        // atob'd length is the exact decoded byte count -- cheaper and
+        // more accurate than a second stat round trip just for the
+        // caption's file size.
+        const sizeBytes = Math.floor((base64.length * 3) / 4) - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0);
+        setImagePreview({ dataUrl: `data:${mime};base64,${base64}`, sizeBytes });
+      } catch (err: any) {
+        console.error("FileTab failed to read image:", err);
+        setImageLoadError(err?.message ? String(err.message) : "Failed to read image file");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (isImage) {
+      fetchImageContent();
+      return;
+    }
+
+    const fetchFileContent = async () => {
+      // check_file_open_safety (REFACTOR_PLAN.md PR 6 commit 8): a cheap
+      // stat + sniff, no full read, so it's safe to call unconditionally
+      // before every open. Reads the threshold fresh via getState() rather
+      // than subscribing to it, so changing the Settings preference
+      // elsewhere doesn't re-run this whole effect (which disposes and
+      // reloads the Monaco model in its cleanup below) for every open tab.
+      let safety: { kind: "safe" } | { kind: "binary"; sizeBytes: number } | { kind: "too_large"; sizeBytes: number } = {
+        kind: "safe",
+      };
+      try {
+        const thresholdBytes = useWorkspaceStore.getState().editorFileSafety.largeFileThresholdBytes;
+        const raw: any = await invoke("check_file_open_safety", { path: tab.path, maxBytes: thresholdBytes });
+        safety = raw.kind === "safe" ? { kind: "safe" } : { kind: raw.kind, sizeBytes: raw.size_bytes };
+      } catch (err) {
+        // A file the safety check can't stat (e.g. a brand-new file that
+        // only exists in the VFS cache, not yet written to disk) falls
+        // back to "safe" -- the existing VFS read below already has its
+        // own error handling for a genuinely missing file.
+        console.warn("check_file_open_safety failed, proceeding as safe:", err);
+      }
+      setFileSafety(safety);
+
+      if (safety.kind === "binary") {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        console.log(`FileTab reading VFS path: ${tab.path}`);
+        const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.path);
         setFileContent(content);
+        // Shebang detection (PR 6 commit 5): only worth checking when the
+        // filename alone resolved to nothing more specific -- an
+        // already-recognized extension is never overridden by a shebang.
+        if (getMonacoLanguageId(tab.path) === "plaintext") {
+          const firstLine = content.split("\n", 1)[0] ?? "";
+          const resolved = resolveLanguage(tab.path, firstLine);
+          if (resolved.id !== "plaintext") setShebangLanguage(resolved.id);
+        }
       } catch (err: any) {
         console.error("FileTab failed to read VFS:", err);
         setFileContent(`// Error reading file: ${err.message}`);
@@ -145,30 +248,31 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
       inlineChatCommandRef.current?.dispose();
       inlineChatCommandRef.current = null;
       // We render <Editor keepCurrentModel /> below, so @monaco-editor/react
-      // never disposes the shared Monaco model on unmount. (Its keepCurrentModel
-      // flag is captured at mount time inside a [] effect, which predates any
-      // split, so a conditional prop can't reliably cover the shared-model
-      // case — closing the original editor would still dispose the model and
-      // black out the split copy.) We own model lifecycle here: dispose the
-      // model only when this was the last editor group still showing the file.
-      // Let the Monaco React wrapper complete its passive unmount cleanup
-      // before touching a shared model. Disposing synchronously here races its
-      // internal cancellation tokens during a branch reset and causes the
-      // unhandled Monaco rejection reported by the browser.
+      // never disposes the Monaco model on unmount; we own that lifecycle here.
+      //
+      // The "still open elsewhere" check is a holdover from split editors,
+      // where one file could be mounted in two panes and closing either would
+      // black out the other. File identity is unique per path now, so it can
+      // no longer be true -- it is kept as cheap insurance rather than making
+      // disposal unconditional.
+      //
+      // The deferral is NOT about splits and must stay: disposing synchronously
+      // races the Monaco wrapper's internal cancellation tokens during a branch
+      // reset, producing an unhandled rejection.
       window.setTimeout(() => {
         const monaco = (window as any).monaco;
         if (!monaco) return;
-        const uri = monaco.Uri.parse(`file://${tab.key}`);
+        const uri = monaco.Uri.parse(`file://${tab.path}`);
         const model = monaco.editor.getModel(uri);
         const stillOpenElsewhere = useWorkspaceStore
           .getState()
-          .editorGroups.some((g) => g.openTabs.some((t) => t.key === tab.key));
+          .tabs.some((t) => t.type === "file" && t.path === tab.path);
         if (model && !model.isDisposed?.() && !stillOpenElsewhere) {
           model.dispose();
         }
       }, 0);
     };
-  }, [tab.key]);
+  }, [tab.path]);
 
   // Trigger editor layout when tab becomes active
   useEffect(() => {
@@ -191,7 +295,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
 
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        await invoke("write_file_disk", { path: tab.key, content: value });
+        await invoke("write_file_disk", { path: tab.path, content: value });
         console.log(`FileTab auto-saved: ${tab.title}`);
         useWorkspaceStore.getState().loadGitStatus(); // Reload git changes list
       } catch (err) {
@@ -201,12 +305,14 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
   };
 
   const handleOpenFileHistory = () => {
-    openTab({
-      id: `git-history-${tab.key}`,
-      type: "git-history",
-      title: `History: ${tab.title}`,
-      key: tab.key,
-    });
+    // Repo-scoped now: the identity carries the repository, so the same file
+    // in two repositories no longer collides on one history tab. Passing
+    // fileRepoPath explicitly (found while auditing blame, PR 5b commit 19)
+    // fixes a real bug: omitting it left the git-history policy default to
+    // the workspace root regardless of which repository the file actually
+    // lives in, so history for a file inside a submodule opened scoped to
+    // the whole workspace instead.
+    openTab({ type: "git-history", path: tab.path, repoPath: fileRepoPath || undefined });
   };
 
   const scrollToLine = (editor: any, lineNum: number) => {
@@ -244,8 +350,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
     if (!word.test(line)) return -1;
 
     let score = 10;
-    if (match.path === tab.key) score += 4;
-    if (match.line === currentLine && match.path === tab.key) score -= 8;
+    if (match.path === tab.path) score += 4;
+    if (match.line === currentLine && match.path === tab.path) score -= 8;
     if (new RegExp(`\\b(class|interface|enum|record|struct|trait|type)\\s+${escaped}\\b`).test(line)) score += 100;
     if (new RegExp(`\\b(function|def|fn|func)\\s+${escaped}\\s*\\(`).test(line)) score += 95;
     if (new RegExp(`\\b(public|private|protected|static|final|abstract|override|virtual|async|export|pub)\\b.*\\b${escaped}\\s*\\(`).test(line)) score += 90;
@@ -281,10 +387,9 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
 
   const openDefinitionCandidate = (candidate: DefinitionCandidate) => {
     openTab({
-      id: `file-${candidate.path}`,
       type: "file",
+      path: candidate.path,
       title: candidate.name,
-      key: candidate.path,
       line: candidate.line > 0 ? candidate.line : undefined,
     });
     setDefinitionMenu(null);
@@ -378,7 +483,10 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
     if (monaco) {
       inlineChatCommandRef.current?.dispose();
       inlineChatCommandRef.current = editor.addAction({
-        id: `rusty.inlineChat.${groupId}.${tab.id}`,
+        // The id used to be namespaced by editor group, because the same tab
+        // could be mounted in two split panes at once. Tab ids are unique now,
+        // so there can only ever be one editor per tab.
+        id: `rusty.inlineChat.${tab.id}`,
         label: "Open Inline Chat",
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
         run: () => {
@@ -402,8 +510,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
           setInlineChat({
             position: { x, y },
             context: {
-              filePath: tab.key,
-              language: getEditorLanguage(tab.key),
+              filePath: tab.path,
+              language: getEditorLanguage(tab.path),
               fileContent: model.getValue(),
               selection: {
                 text: selectedText,
@@ -418,13 +526,17 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
       });
     }
 
-    if (LSP_EDITOR_ENABLED) {
+    // A too_large file (REFACTOR_PLAN.md PR 6 commit 8) skips the LSP
+    // binding even once LSP_EDITOR_ENABLED is on -- no point paying for
+    // language-server sync on a file the user can't edit anyway without
+    // explicitly opting in via "Load anyway".
+    if (LSP_EDITOR_ENABLED && !(fileSafety.kind === "too_large" && !forceEditableLargeFile)) {
       // Attach LSP intelligence: registers Monaco providers for the file's
       // language, syncs the document with the language server, maps diagnostics
       // to markers, and installs the global openCodeEditor override that turns
       // cmd+click / F12 definition jumps into Rusty tab opens. All of this used
       // to be inline here and in lspService.registerEditor.
-      lspBindingRef.current = MonacoLspBinding.attach(editor, tab.key, {
+      lspBindingRef.current = MonacoLspBinding.attach(editor, tab.path, {
         onStatus: setLspStatus,
       });
     }
@@ -448,7 +560,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
   };
 
   const getEditorLanguage = (filePath: string): string => {
-    return getFileTypeDetails(filePath).language;
+    return shebangLanguage ?? getFileTypeDetails(filePath).language;
   };
 
   if (loading) {
@@ -457,6 +569,30 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
         <span>Loading file content...</span>
       </div>
     );
+  }
+
+  if (isImage) {
+    if (imageLoadError) {
+      return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={0} />;
+    }
+    if (imagePreview) {
+      return (
+        <ImageFilePreview
+          path={tab.path}
+          fileName={tab.title ?? tab.path}
+          src={imagePreview.dataUrl}
+          sizeBytes={imagePreview.sizeBytes}
+        />
+      );
+    }
+    // Neither set yet and not loading -- shouldn't happen (fetchImageContent
+    // always sets one or the other before clearing `loading`), but falls
+    // through to the unsupported card rather than rendering nothing.
+    return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={0} />;
+  }
+
+  if (fileSafety.kind === "binary") {
+    return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={fileSafety.sizeBytes} />;
   }
 
   return (
@@ -529,7 +665,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
 
         {/* Reveal in Tree Button */}
         <button
-          onClick={() => revealFileInTree(tab.key)}
+          onClick={() => revealFileInTree(tab.path)}
           className="bg-[var(--bg-sidebar)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-light)] hover:border-[var(--border-active)] p-1.5 rounded-md text-[10px] font-mono font-bold transition-all shadow-md cursor-pointer flex items-center space-x-1"
           title="Reveal in File Tree"
         >
@@ -604,6 +740,21 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
         />
       )}
 
+      {fileSafety.kind === "too_large" && !forceEditableLargeFile && (
+        <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-2 bg-[var(--color-status-warning-bg)] border-b border-[var(--color-status-warning-border)] text-[var(--color-status-warning)] font-mono text-[11px]">
+          <span>
+            This file is {formatFileSize(fileSafety.sizeBytes)}, above the large-file threshold -- opened read-only.
+          </span>
+          <button
+            type="button"
+            onClick={() => setForceEditableLargeFile(true)}
+            className="flex-shrink-0 px-2 py-1 rounded border border-[var(--color-status-warning-border)] hover:bg-[var(--color-status-warning-bg)]/60 cursor-pointer"
+          >
+            Load anyway (editable)
+          </button>
+        </div>
+      )}
+
       {isMarkdown && markdownPreview ? (
         <div className="h-full overflow-auto px-6 py-5 pr-24 scrollbar-wider">
           <MarkdownRenderer content={fileContent} className="max-w-4xl mx-auto" />
@@ -611,8 +762,8 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
       ) : (
         <Editor
           height="100%"
-          path={`file://${tab.key}`}
-          language={getEditorLanguage(tab.key)}
+          path={`file://${tab.path}`}
+          language={getEditorLanguage(tab.path)}
           theme="rusty-custom-theme"
           value={fileContent}
           onChange={handleEditorChange}
@@ -621,6 +772,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, groupId }) => {
           options={createMonacoEditorOptions(editorFontSize, {
             minimap: { enabled: true },
             scrollBeyondLastLine: false,
+            readOnly: fileSafety.kind === "too_large" && !forceEditableLargeFile,
             lineNumbers: (num: number) => {
               if (showBlame && blameData[num]) {
                 const blame = blameData[num];

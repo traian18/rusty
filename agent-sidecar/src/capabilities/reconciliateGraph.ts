@@ -1,8 +1,23 @@
 import path from "path";
 import { WebSocket } from "ws";
 import { resolveHarness } from "../services/harness";
-import { request, safeSend, validateRpcResponse } from "../services/websocket";
+import { request, safeSend, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createUsageReporter } from "../services/usageBroadcast";
+
+// Same rationale as globalExplore.ts/reconciliateEdge.ts: this capability's
+// per-file runToolLoop call has no activePiRuns-backed cancellation of its
+// own, and shouldAbort's old "has the per-run socket closed" check no longer
+// trips once every capability shares one agentHarnessClient connection.
+const activeGraphReconciliations = new Set<string>();
+const cancelledGraphReconciliations = new Set<string>();
+
+/** Real cancellation for a reconciliate_graph run: returns whether one was active. */
+export function stopGraphReconciliation(tabId: string): boolean {
+  const wasActive = activeGraphReconciliations.has(tabId);
+  cancelledGraphReconciliations.add(tabId);
+  return wasActive;
+}
 
 interface ReconciliationNode {
   id: string;
@@ -216,6 +231,16 @@ export async function buildOverlappingFileContext(options: {
 
 export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void> {
   const { tabId, model, nodes, workspaceRoot, customProvider, duplicateFiles, fileSources, chatHistory, userMessage } = data;
+
+  try {
+    requireString(tabId, "tabId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "reconciliation_graph_error", tabId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] reconciliate_graph starting for tab: ${tabId}, userMessage: ${userMessage || "none"}`);
 
   const reconciliationStreamId = `__reconciliation__:${tabId}`;
@@ -226,6 +251,8 @@ export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void>
     console.log(`[ReconciliateGraph] ${message}`);
     safeSend(ws, { type: "log", nodeId: reconciliationStreamId, message });
   };
+  activeGraphReconciliations.add(tabId);
+  cancelledGraphReconciliations.delete(tabId);
 
   try {
     const formattedNodes: ReconciliationNode[] = Array.isArray(nodes) ? nodes : [];
@@ -260,7 +287,7 @@ export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void>
         type: "read_file",
         runId: reconciliationStreamId,
         payload: { path: resolvedPath },
-        validateResponse: validateRpcResponse,
+        validateResponse: validateReadFileRpcResponse,
       });
       if (res.error) throw new Error(String(res.error));
       return String(res.content ?? "");
@@ -271,7 +298,7 @@ export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void>
         type: "write_file",
         runId: reconciliationStreamId,
         payload: { path: resolvedPath, content },
-        validateResponse: validateRpcResponse,
+        validateResponse: validateWriteFileRpcResponse,
       });
       if (res.error) throw new Error(String(res.error));
       finalizedFiles.add(resolvedPath);
@@ -420,7 +447,7 @@ ${JSON.stringify(compactFileContext(fileContext), null, 2)}`;
             // Each file is an independent case. Relevant history is already
             // bounded in the prompt so provider adapters cannot re-expand it.
             history: [],
-            shouldAbort: () => ws.readyState !== WebSocket.OPEN,
+            shouldAbort: () => ws.readyState !== WebSocket.OPEN || cancelledGraphReconciliations.has(tabId),
             onUsage: usageReporter,
           });
           reports.push(`${fileContext.path}\n${truncateContextText(fileReport, 4_000)}`);
@@ -477,5 +504,8 @@ ${JSON.stringify(compactFileContext(fileContext), null, 2)}`;
       filePath: activeFilePath,
       error: err.message,
     });
+  } finally {
+    activeGraphReconciliations.delete(tabId);
+    cancelledGraphReconciliations.delete(tabId);
   }
 }

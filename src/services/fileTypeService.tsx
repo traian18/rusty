@@ -1,5 +1,5 @@
 import React from "react";
-import { getMonacoLanguageId } from "./lspLanguage";
+import { getMonacoLanguageId, resolveLanguage, type IconKey } from "./languageRegistry";
 
 // --- 1. Custom SVG Branding Logos for Technologies ---
 
@@ -168,12 +168,56 @@ const ConfigLogo: React.FC<{ size: number; className?: string }> = ({ size, clas
   </svg>
 );
 
+const ImageLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} className={className} fill="none" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" fill="#a855f7" stroke="none" />
+    <path d="M21 15l-5-5L5 21" />
+  </svg>
+);
+
 const DefaultLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} className={className} fill="none" stroke="#718096" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
     <polyline points="14 2 14 8 20 8" />
   </svg>
 );
+
+/**
+ * Generates a colored-rect-plus-text-label logo, the same shape several
+ * hand-written logos above already use (JsonLogo, GoLogo, PhpLogo, CppLogo,
+ * CLogo...). Used for languages added in PR 6's coverage pass that don't
+ * warrant a bespoke hand-drawn SVG -- each still gets its real brand color,
+ * just generated instead of hand-authored per language.
+ */
+function makeLetterBadgeLogo(
+  label: string,
+  bg: string,
+  fg: string = "#fff",
+): React.FC<{ size: number; className?: string }> {
+  const fontSize = label.length >= 4 ? 26 : label.length === 3 ? 32 : 42;
+  const LetterBadgeLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
+    <svg viewBox="0 0 100 100" width={size} height={size} className={className}>
+      <rect width="100" height="100" rx="8" fill={bg} />
+      <text x="50" y="65" fill={fg} fontSize={fontSize} fontWeight="900" fontFamily="sans-serif" textAnchor="middle">
+        {label}
+      </text>
+    </svg>
+  );
+  return LetterBadgeLogo;
+}
+
+const KotlinLogo = makeLetterBadgeLogo("KT", "#7f52ff");
+const ScalaLogo = makeLetterBadgeLogo("SC", "#dc322f");
+const SwiftLogo = makeLetterBadgeLogo("SW", "#f05138");
+const FSharpLogo = makeLetterBadgeLogo("F#", "#378bba");
+const ObjectiveCLogo = makeLetterBadgeLogo("OBJC", "#438eff");
+const DartLogo = makeLetterBadgeLogo("DART", "#0175c2");
+const RLogo = makeLetterBadgeLogo("R", "#276dc3");
+const PowerShellLogo = makeLetterBadgeLogo("PS1", "#012456");
+const HclLogo = makeLetterBadgeLogo("TF", "#7b42bc");
+const GraphqlLogo = makeLetterBadgeLogo("GQL", "#e10098");
+const ProtobufLogo = makeLetterBadgeLogo("PB", "#4285f4");
 
 // --- 2. Filetype Details Mapping ---
 
@@ -186,121 +230,63 @@ export interface FileTypeDetails {
 /**
  * Returns custom SVG icon component, CSS helper class, and Monaco language code based on filename extension.
  *
- * The `language` field is sourced from `lspLanguage.getMonacoLanguageId` so that
- * the Monaco model language id and the LSP server key can never drift apart
- * (see src/services/lspLanguage.ts). Icon selection stays here.
+ * The `language` field is sourced from `languageRegistry.getMonacoLanguageId`
+ * so that the Monaco model language id and the LSP server key can never
+ * drift apart (see src/services/languageRegistry.ts). Icon selection stays
+ * here for now -- PR 6 commit 2 folds it onto the same registry too.
  */
 export const getFileTypeDetails = (fileName: string): FileTypeDetails => {
   return { icon: iconForFile(fileName), color: "", language: getMonacoLanguageId(fileName) };
 };
 
+/**
+ * IconKey -> component (REFACTOR_PLAN.md PR 6 commit 2). This is the only
+ * place that still knows about the actual logo components -- icon
+ * *selection* (which extension/filename gets which key) now lives in
+ * languageRegistry.ts's `RULES`, not here, so the two can never drift back
+ * apart the way fileTypeService's icon switch and lspLanguage's id switch
+ * once did.
+ */
+const ICONS: Record<IconKey, React.FC<{ size: number; className?: string }>> = {
+  react: ReactLogo,
+  typescript: TypeScriptLogo,
+  javascript: JavaScriptLogo,
+  html: HtmlLogo,
+  css: CssLogo,
+  json: JsonLogo,
+  markdown: MarkdownLogo,
+  python: PythonLogo,
+  java: JavaLogo,
+  rust: RustLogo,
+  go: GoLogo,
+  ruby: RubyLogo,
+  php: PhpLogo,
+  cpp: CppLogo,
+  c: CLogo,
+  sql: SqlLogo,
+  shell: ShellLogo,
+  config: ConfigLogo,
+  env: EnvLogo,
+  git: GitLogo,
+  docker: DockerLogo,
+  kotlin: KotlinLogo,
+  scala: ScalaLogo,
+  swift: SwiftLogo,
+  fsharp: FSharpLogo,
+  objectivec: ObjectiveCLogo,
+  dart: DartLogo,
+  r: RLogo,
+  powershell: PowerShellLogo,
+  hcl: HclLogo,
+  graphql: GraphqlLogo,
+  protobuf: ProtobufLogo,
+  image: ImageLogo,
+  default: DefaultLogo,
+};
+
 /** Resolve the technology logo for a file name (used by FileIcon + getFileTypeDetails). */
 function iconForFile(fileName: string): React.FC<{ size: number; className?: string }> {
-  const lowerName = fileName.toLowerCase();
-
-  // 1. Exact full file name checks (highest priority)
-  if (lowerName === "dockerfile") return DockerLogo;
-  if (lowerName === "package.json") return JsonLogo;
-  if (lowerName === "tsconfig.json" || lowerName === "jsconfig.json") return JsonLogo;
-  if (lowerName === ".gitignore" || lowerName === ".gitconfig" || lowerName === ".gitattributes") return GitLogo;
-  if (lowerName === "docker-compose.yml" || lowerName === "docker-compose.yaml") return DockerLogo;
-  if (lowerName === "gemfile" || lowerName === "gemfile.lock") return RubyLogo;
-  if (lowerName === "makefile") return ConfigLogo;
-
-  // 2. Prefix checks
-  if (lowerName.startsWith(".env")) return EnvLogo;
-
-  // 3. Extension checks
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    // React / Web Tech
-    case "tsx":
-    case "jsx":
-      return ReactLogo;
-    case "ts":
-    case "mts":
-    case "cts":
-      return TypeScriptLogo;
-    case "js":
-    case "mjs":
-    case "cjs":
-      return JavaScriptLogo;
-    case "html":
-    case "htm":
-    case "xhtml":
-      return HtmlLogo;
-    case "css":
-    case "scss":
-    case "sass":
-    case "less":
-      return CssLogo;
-    case "json":
-      return JsonLogo;
-    case "md":
-    case "markdown":
-      return MarkdownLogo;
-
-    // Languages
-    case "py":
-    case "pyw":
-      return PythonLogo;
-    case "java":
-    case "class":
-    case "jar":
-      return JavaLogo;
-    case "rs":
-      return RustLogo;
-    case "go":
-      return GoLogo;
-    case "rb":
-      return RubyLogo;
-    case "php":
-      return PhpLogo;
-    case "cpp":
-    case "cc":
-    case "cxx":
-    case "hpp":
-    case "h":
-      return CppLogo;
-    case "c":
-      return CLogo;
-
-    // Database / SQL
-    case "sql":
-    case "psql":
-    case "sqlite":
-    case "sqlite3":
-    case "db":
-      return SqlLogo;
-
-    // Shell Scripts
-    case "sh":
-    case "bash":
-    case "zsh":
-    case "fish":
-    case "bat":
-    case "cmd":
-    case "ps1":
-      return ShellLogo;
-
-    // Configurations & Markup
-    case "toml":
-      return ConfigLogo;
-    case "yaml":
-    case "yml":
-      return ConfigLogo;
-    case "xml":
-      return ConfigLogo;
-    case "ini":
-    case "conf":
-    case "config":
-    case "lock":
-    case "properties":
-      return ConfigLogo;
-
-    default:
-      return DefaultLogo;
-  }
+  return ICONS[resolveLanguage(fileName).iconKey];
 }
 
 interface FileIconProps {

@@ -2,24 +2,32 @@
 // connection-test.ts — Connection test types, probe functions,
 // orchestrator, and the useConnectionTest hook.
 //
-// The browser-side probes are deliberately limited:
-//   - HTTP/SSE: abortable fetch with mode "no-cors"
-//   - WebSocket: URL format validation only
-//   - Stdio: simulated spawn check (real spawn is backend-only)
+// REFACTOR_PLAN.md PR 3c: all three transports now run a REAL test
+// against the sidecar's POST /mcp/test route (mcpTestService.ts),
+// which connects, performs the `initialize` handshake, and lists
+// tools via the same mcpClient.ts machinery the app uses at runtime --
+// on demand only (this button), never a startup step. Before this,
+// stdio was a 450ms simulated sleep that always reported success,
+// websocket was a URL-format check that never opened a socket, and
+// http/sse used `fetch(..., {mode: "no-cors"})`, whose opaque response
+// couldn't distinguish a 200 from a 500.
 // ============================================================
 
 import { useState, useCallback } from "react";
 import type { UseFormWatch } from "react-hook-form";
 import type { McpFormValues } from "./types";
-import { isValidUrl } from "./form-utils";
-import { MAX_PROBE_TIMEOUT } from "./constants";
+import { isValidUrl, toServerConfig } from "./form-utils";
+import { mcpTestService } from "../../services/mcpTestService";
 
 // ───────────────────── Types ─────────────────────────────
 
 /** Result of a single connection probe. */
 export type ProbeResult = { status: "success" | "error"; message: string };
 
-/** Subset of form values needed to run a connection test. */
+/** Subset of form values needed to validate before running a connection
+    test -- the real test itself needs the FULL form (toServerConfig
+    converts all of it into a real McpServerConfig, including args/env/
+    auth, which validation alone doesn't need). */
 export type McpFormTestValues = Pick<
   McpFormValues,
   "transportType" | "url" | "command" | "timeout"
@@ -53,88 +61,35 @@ export function validateTestInputs(values: McpFormTestValues): string | null {
   return null;
 }
 
-// ───────────────────── Probe functions ───────────────────
-
-/**
- * Simulates a stdio spawn check for the test connection feature.
- * Real process spawning is backend-only, so this is a simulated delay.
- */
-export async function probeStdioCommand(command: string): Promise<ProbeResult> {
-  await new Promise((resolve) => setTimeout(resolve, 450));
-  return {
-    status: "success",
-    message: `Simulated check: would spawn \`${command} --version\`. Actual process spawn is backend-only.`,
-  };
-}
-
-/**
- * Validates a WebSocket URL format. Live handshake is not possible
- * from the browser environment.
- */
-export function probeWebSocketUrl(_url: string): ProbeResult {
-  return {
-    status: "success",
-    message:
-      "WebSocket URL is valid. Live handshake is performed by the backend at runtime — browsers cannot probe ws:// directly.",
-  };
-}
-
-/**
- * Probes an HTTP/SSE endpoint with an abortable fetch request.
- * Uses mode: "no-cors" and a capped timeout.
- */
-export async function probeHttpEndpoint(
-  url: string,
-  timeoutMs: number,
-): Promise<ProbeResult> {
-  const probeTimeout = Math.min(
-    Number.isFinite(timeoutMs) ? timeoutMs : MAX_PROBE_TIMEOUT,
-    MAX_PROBE_TIMEOUT,
-  );
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), probeTimeout);
-    await fetch(url, { mode: "no-cors", signal: controller.signal });
-    clearTimeout(timer);
-
-    return {
-      status: "success",
-      message: `Reachable — endpoint responded (${url}). Auth headers are applied at runtime.`,
-    };
-  } catch (e: unknown) {
-    if (e instanceof DOMException && e.name === "AbortError") {
-      return {
-        status: "error",
-        message: `Request timed out after ${probeTimeout}ms.`,
-      };
-    }
-    const msg = e instanceof Error ? e.message : String(e);
-    return { status: "error", message: `Connection failed: ${msg}` };
-  }
-}
-
 // ───────────────────── Orchestrator ──────────────────────
 
+/** Formats a successful test's message from the real tool list. */
+function successMessage(result: { toolCount: number; tools: string[] }): string {
+  const toolList = result.tools.length > 0 ? `: ${result.tools.join(", ")}` : "";
+  return `Connected — ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available${toolList}.`;
+}
+
 /**
- * Runs the appropriate connection test based on the transport type.
- * Orchestrates validation and delegates to the correct probe function.
+ * Runs a real connection test against the sidecar's POST /mcp/test route
+ * (mcpTestService.ts) -- validates first, then converts the FULL form
+ * values into a real McpServerConfig (toServerConfig, form-utils.ts) so
+ * the test exercises the actual configured transport, args, env, and auth,
+ * not a stripped-down subset of it.
  */
 export async function runConnectionTest(
-  values: McpFormTestValues,
+  values: McpFormValues,
 ): Promise<ProbeResult> {
   const validationError = validateTestInputs(values);
   if (validationError) {
     return { status: "error", message: validationError };
   }
 
-  switch (values.transportType) {
-    case "stdio":
-      return probeStdioCommand(values.command);
-    case "websocket":
-      return probeWebSocketUrl(values.url);
-    default:
-      return probeHttpEndpoint(values.url, values.timeout);
+  try {
+    const result = await mcpTestService.testConnection(toServerConfig(values));
+    return { status: "success", message: successMessage(result) };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { status: "error", message };
   }
 }
 
@@ -152,15 +107,8 @@ export function useConnectionTest(
   const [test, setTest] = useState<TestState>({ status: "idle" });
 
   const handleTest = useCallback(async () => {
-    const values: McpFormTestValues = {
-      transportType: watch("transportType"),
-      url: watch("url"),
-      command: watch("command"),
-      timeout: watch("timeout"),
-    };
-
     setTest({ status: "testing", message: "Testing connection..." });
-    const result = await runConnectionTest(values);
+    const result = await runConnectionTest(watch());
     setTest(result);
   }, [watch]);
 

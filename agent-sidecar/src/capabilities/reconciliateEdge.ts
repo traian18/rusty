@@ -8,14 +8,44 @@
 
 import { WebSocket } from "ws";
 import path from "path";
-import { safeSend, request, validateRpcResponse } from "../services/websocket";
+import { safeSend, request, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { callLlmWithToolsPiStreaming } from "../services/llmRuntime";
 import { createUsageReporter } from "../services/usageBroadcast";
 
+// Same rationale as globalExplore.ts's stopGlobalExploration: this capability's
+// tool loop (callLlmWithToolsPiStreaming, the same shouldAbort-polling
+// implementation globalExplore uses) has no activePiRuns-backed cancellation
+// of its own, and shouldAbort's old "has the per-run socket closed" check no
+// longer trips once every capability shares one agentHarnessClient connection.
+const activeReconciliations = new Set<string>();
+const cancelledReconciliations = new Set<string>();
+
+/** Real cancellation for a reconciliate_edge run: returns whether one was active. */
+export function stopEdgeReconciliation(edgeId: string): boolean {
+  const wasActive = activeReconciliations.has(edgeId);
+  cancelledReconciliations.add(edgeId);
+  return wasActive;
+}
+
 export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> {
   const { edgeId, sourceTaskId, targetTaskId, modifiedFiles, userMessage, chatHistory, workspaceRoot, model, sourcePrompt, targetPrompt, customProvider } = data;
+
+  try {
+    requireString(edgeId, "edgeId");
+    requireString(sourceTaskId, "sourceTaskId");
+    requireString(targetTaskId, "targetTaskId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "reconciliation_error", edgeId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] reconciliate_edge starting`, { edgeId, sourceTaskId, targetTaskId });
+  activeReconciliations.add(edgeId);
+  cancelledReconciliations.delete(edgeId);
 
   try {
     const readVfsTool = {
@@ -32,7 +62,7 @@ export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> 
           type: "read_file",
           runId: edgeId,
           payload: { path: resolvedPath },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateReadFileRpcResponse,
         });
         if (res.error) {
           const errorMsg = String(res.error).toLowerCase();
@@ -63,7 +93,7 @@ export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> 
           type: "write_file",
           runId: edgeId,
           payload: { path: resolvedPath, content },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateWriteFileRpcResponse,
         });
         if (res.error) throw new Error(String(res.error));
         return `File successfully written to: ${resolvedPath}`;
@@ -107,7 +137,7 @@ Workspace root: ${workspaceRoot || "unknown"}
       maxRounds: 15,
       cwd: workspaceRoot,
       history: chatHistory || [],
-      shouldAbort: () => ws.readyState !== WebSocket.OPEN,
+      shouldAbort: () => ws.readyState !== WebSocket.OPEN || cancelledReconciliations.has(edgeId),
       onUsage: createUsageReporter(ws, {
         workspaceRoot,
         surface: "edge_reconciliation",
@@ -129,5 +159,8 @@ Workspace root: ${workspaceRoot || "unknown"}
       edgeId,
       error: err.message
     });
+  } finally {
+    activeReconciliations.delete(edgeId);
+    cancelledReconciliations.delete(edgeId);
   }
 }

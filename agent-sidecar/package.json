@@ -7,6 +7,7 @@
     "dev": "PORT=4001 node ./node_modules/ts-node/dist/bin.js src/server.ts",
     "build": "npm run typecheck && node ./node_modules/tsup/dist/cli-default.js src/server.ts --format cjs,esm --dts",
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "test": "node --test -r ./node_modules/ts-node/register \"src/**/*.test.ts\"",
     "test:llm": "node --test -r ./node_modules/ts-node/register src/services/llmProviders.test.ts src/services/llmRuntime.test.ts src/services/copilotService.test.ts src/services/codexService.test.ts src/services/providerQuota.test.ts",
     "test:architecture": "node --test -r ./node_modules/ts-node/register src/services/websocket.test.ts src/services/agentProtocol.test.ts src/services/eventPersistence.test.ts src/services/delegationManager.test.ts src/capabilities/reconciliateGraph.test.ts",
     "start": "node dist/server.js",

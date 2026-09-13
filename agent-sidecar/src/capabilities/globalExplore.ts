@@ -9,14 +9,44 @@
 import { WebSocket } from "ws";
 import path from "path";
 import fs from "fs";
-import { safeSend, request, validateRpcResponse } from "../services/websocket";
+import { safeSend, request, validateReadFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool, listFilesRecursive } from "../services/tools";
 import { resolveHarness } from "../services/harness";
 import { createMcpTools, McpServerConfig } from "../services/mcpClient";
 import { createUsageReporter } from "../services/usageBroadcast";
 
+// runToolLoop (unlike executeNode/agentChat/inlineChat's runAgentic) has no
+// activePiRuns-backed cancellation of its own -- its shouldAbort callback is
+// only ever polled between tool-calling rounds, so it needs a real signal to
+// poll. Before this, that signal was "has the (per-run, in the old
+// architecture) WebSocket closed" -- now that every capability shares one
+// long-lived agentHarnessClient connection, the socket no longer closes just
+// because one exploration should stop, so a real per-nodeId cancellation
+// flag is what shouldAbort now polls instead.
+const activeExplorations = new Set<string>();
+const cancelledExplorations = new Set<string>();
+
+/** Real cancellation for a global_explore run: returns whether one was active. */
+export function stopGlobalExploration(nodeId: string): boolean {
+  const wasActive = activeExplorations.has(nodeId);
+  cancelledExplorations.add(nodeId);
+  return wasActive;
+}
+
 export async function globalExplore(ws: WebSocket, data: any): Promise<void> {
   const { nodeId, prompt, workspaceRoot, model, chatHistory, customProvider, mcpServers, planOnly } = data;
+
+  try {
+    requireString(nodeId, "nodeId");
+    requireString(prompt, "prompt");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "global_explore_error", nodeId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] global_explore starting`, { nodeId, workspaceRoot, model, mcpCount: mcpServers?.length || 0 });
 
   const sendLog = (message: string) => {
@@ -24,6 +54,8 @@ export async function globalExplore(ws: WebSocket, data: any): Promise<void> {
   };
 
   const mcpDisposers: Array<() => void> = [];
+  activeExplorations.add(nodeId);
+  cancelledExplorations.delete(nodeId);
 
   try {
     const readVfsTool = {
@@ -59,7 +91,7 @@ export async function globalExplore(ws: WebSocket, data: any): Promise<void> {
           type: "read_file",
           runId: nodeId,
           payload: { path: resolvedPath },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateReadFileRpcResponse,
         });
         if (res.error) {
           const errorMsg = String(res.error).toLowerCase();
@@ -147,7 +179,10 @@ IMPORTANT: End your response with a section marked "--- SUMMARY ---" that contai
       console.log(`WebSocket [Server] augmented prompt preview: ${augmentedPrompt.substring(0, 300)}...`);
 
       const sendToken = (token: string) => {
-        safeSend(ws, { type: "token", content: token });
+        // nodeId added so a client subscribed to multiple runs can tell which
+        // exploration a token belongs to -- previously this event carried no
+        // correlating id at all, unlike every other capability's token event.
+        safeSend(ws, { type: "token", nodeId, content: token });
       };
 
       const responseText = await resolveHarness(customProvider).runToolLoop({
@@ -161,7 +196,7 @@ IMPORTANT: End your response with a section marked "--- SUMMARY ---" that contai
         maxRounds: 50,
         cwd: workspaceRoot,
         history: chatHistory || [],
-        shouldAbort: () => ws.readyState !== WebSocket.OPEN,
+        shouldAbort: () => ws.readyState !== WebSocket.OPEN || cancelledExplorations.has(nodeId),
         onUsage: createUsageReporter(ws, {
           workspaceRoot,
           surface: "global_explore",
@@ -214,5 +249,8 @@ IMPORTANT: End your response with a section marked "--- SUMMARY ---" that contai
       nodeId,
       error: err.message
     });
+  } finally {
+    activeExplorations.delete(nodeId);
+    cancelledExplorations.delete(nodeId);
   }
 }

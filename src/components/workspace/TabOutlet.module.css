@@ -1,0 +1,32 @@
+.outlet {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-editor-background);
+}
+
+.active {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Kept-mounted-but-inactive panels are parked off-screen: they keep DOM,
+   sockets and editor state alive without being visible. */
+.parked {
+  position: absolute;
+  top: 0;
+  left: -99999px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.canvasSurface {
+  background: var(--color-surface-canvas);
+}
+
+.editorSurface {
+  background: var(--color-editor-background);
+}

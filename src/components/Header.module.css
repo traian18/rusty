@@ -63,10 +63,14 @@
   transition: border-color var(--motion-fast);
 }
 
-.searchInput:hover,
+.searchInput:hover {
+  border-color: var(--color-border-focus);
+}
+
 .searchInput:focus-visible {
   border-color: var(--color-border-focus);
-  outline: none;
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .shortcut {

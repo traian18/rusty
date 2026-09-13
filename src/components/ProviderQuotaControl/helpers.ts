@@ -1,21 +1,7 @@
-import type { CustomProvider, ProviderQuotaSnapshot, ProviderQuotaWindow } from "../../store";
+import type { ProviderQuotaSnapshot, ProviderQuotaWindow } from "../../store";
 
 /** Key used to persist the selected quota provider in localStorage. */
 export const SELECTED_QUOTA_PROVIDER_KEY = "rusty_quota_provider";
-
-/** Interval (ms) between automatic quota refreshes. */
-export const REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
-
-/**
- * Returns true when the provider has enough configuration to attempt a quota fetch.
- */
-export function isConfiguredProvider(provider: CustomProvider): boolean {
-  return (
-    provider.authType === "environment"
-    || provider.authType === "none"
-    || Boolean(provider.apiKey?.trim())
-  );
-}
 
 /**
  * Formats a number with locale-aware separators and at most one decimal.

@@ -1,19 +1,31 @@
 /** Frontend broker for command approvals emitted by any Pi runtime. */
-export type CommandPermissionDecision = "deny" | "allow_once" | "allow_session";
-export type CommandRisk = "normal" | "elevated" | "destructive";
-export type CommandSessionGrantScope = "executable" | "exact_command";
 
-export interface CommandPermissionRequest {
-  requestId: string;
-  sessionId: string;
-  command: { program: string; args: string[]; cwd: string; timeoutMs: number };
-  risk: CommandRisk;
-  sessionGrantScope: CommandSessionGrantScope;
-  sessionGrantProgram: string;
-  description: string;
+/**
+ * The minimal shape this service needs from whatever transport carried the
+ * request: a real WebSocket satisfies this structurally (readyState + send),
+ * and so does a typed per-capability service's lightweight facade over the
+ * one shared agentHarnessClient connection -- PR 4b migrates consumers off
+ * raw sockets one capability at a time, and this interface (rather than the
+ * concrete WebSocket class) is what lets this service keep working
+ * unchanged for both kinds of caller.
+ */
+export interface CommandPermissionSocket {
+  readonly readyState: number;
+  send(data: string): void;
 }
 
-type PendingPermission = CommandPermissionRequest & { socket: WebSocket };
+// Moved to shared/agent-protocol/rpc.ts (PR 4c) so both the client and the
+// sidecar share one definition; re-exported here unchanged so existing
+// importers of this module are unaffected.
+export type {
+  CommandPermissionDecision,
+  CommandRisk,
+  CommandSessionGrantScope,
+  CommandPermissionRequest,
+} from "../../shared/agent-protocol";
+import type { CommandPermissionDecision, CommandPermissionRequest } from "../../shared/agent-protocol";
+
+type PendingPermission = CommandPermissionRequest & { socket: CommandPermissionSocket };
 type Listener = () => void;
 
 class CommandPermissionService {
@@ -27,7 +39,7 @@ class CommandPermissionService {
 
   getSnapshot = (): CommandPermissionRequest | null => this.queue[0] || null;
 
-  enqueue(message: CommandPermissionRequest, socket: WebSocket): void {
+  enqueue(message: CommandPermissionRequest, socket: CommandPermissionSocket): void {
     if (this.queue.some((request) => request.requestId === message.requestId)) return;
     this.queue.push({ ...message, socket });
     this.emit();
@@ -43,7 +55,7 @@ class CommandPermissionService {
     this.emit();
   }
 
-  removeForSocket(socket: WebSocket): void {
+  removeForSocket(socket: CommandPermissionSocket): void {
     const next = this.queue.filter((request) => request.socket !== socket);
     if (next.length !== this.queue.length) {
       this.queue = next;
@@ -59,7 +71,7 @@ class CommandPermissionService {
 export const commandPermissionService = new CommandPermissionService();
 
 /** Returns true when a WebSocket message was consumed by the permission broker. */
-export function handleCommandPermissionMessage(message: any, socket: WebSocket): boolean {
+export function handleCommandPermissionMessage(message: any, socket: CommandPermissionSocket): boolean {
   if (message?.type !== "command_permission_request" || !message.requestId || !message.sessionId) return false;
   commandPermissionService.enqueue(message as CommandPermissionRequest, socket);
   return true;

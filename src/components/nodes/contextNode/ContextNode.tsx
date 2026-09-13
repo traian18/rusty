@@ -23,7 +23,7 @@
 import React, { memo, useState, useEffect, useCallback } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { useWorkspaceStore } from "../../../store";
-import { parseDragData, getDefaultContextName, sanitizeTabId } from "./helpers";
+import { parseDragData, getDefaultContextName } from "./helpers";
 import { useDebouncedSearch, useContextNodeDrag } from "./hooks";
 import { ContextNodeHeader } from "./ContextNodeHeader";
 import { ContextNodeContent } from "./ContextNodeContent";
@@ -138,10 +138,9 @@ export const ContextNode: React.FC<{
       e.stopPropagation();
       if (data.path && !data.isDir) {
         openTab({
-          id: sanitizeTabId(data.path),
           type: "file",
+          path: data.path,
           title: data.fileName || "File",
-          key: data.path,
         });
       }
     },

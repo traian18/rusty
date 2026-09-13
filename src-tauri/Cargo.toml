@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.17"
+version = "0.1.18"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -29,5 +29,11 @@ fuzzy-matcher = "0.3.7"
 tauri-plugin-window-state = "2"
 tauri-plugin-shell = "2"
 portable-pty = "0.8"
+notify = "8"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 

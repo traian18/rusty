@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceStore } from "../store";
 import { invoke } from "@tauri-apps/api/core";
 import { gitPresenter } from "./git/GitPresenter";
+import { gitErrorMessage } from "./git/gitErrors";
+import { branchOnlyActionsDisabledReason, formatHeadLabel, isDetachedOrUnborn } from "./git/gitHeadLabel";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { buildUnstagedList } from "./sourceControl/sourceControlHelpers";
@@ -31,20 +33,61 @@ import {
 const SourceControl: React.FC = () => {
   // ── Store ──────────────────────────────────────────────────
   const rootPath = useWorkspaceStore((state) => state.rootPath);
-  const gitStatus = useWorkspaceStore((state) => state.gitStatus);
+  const gitStatusSingleSlot = useWorkspaceStore((state) => state.gitStatus);
+  const statusByRepositoryId = useWorkspaceStore((state) => state.statusByRepositoryId);
   const loadGitStatus = useWorkspaceStore((state) => state.loadGitStatus);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const lastRename = useWorkspaceStore((state) => state.lastRename);
   const setLastRename = useWorkspaceStore((state) => state.setLastRename);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  const activeRepositoryId = useWorkspaceStore((state) => state.activeRepositoryId);
+  const setActiveRepositoryId = useWorkspaceStore((state) => state.setActiveRepositoryId);
+  const discoverRepositories = useWorkspaceStore((state) => state.discoverRepositories);
+  const initSubmodule = useWorkspaceStore((state) => state.initSubmodule);
+  const updateSubmodule = useWorkspaceStore((state) => state.updateSubmodule);
+  const syncSubmodule = useWorkspaceStore((state) => state.syncSubmodule);
+
+  // `activeRepo`/`subprojects` used to be local component state, populated
+  // by the naive `scanSubprojects()` filesystem walk (REFACTOR_PLAN.md PR
+  // 5b commit 16) -- both now derive from the store's Git-native
+  // `repositories`/`activeRepositoryId`, which `discoverRepositories()`
+  // populates below. `activeRepo` still resolves to a plain worktree path
+  // string, since every call site below (gitPresenter, invoke, openTab)
+  // takes a rootDir string, not a repository id.
+  const activeRepository = repositories.find((repo) => repo.id === activeRepositoryId) ?? null;
+  const activeRepo = activeRepository?.worktreePath ?? rootPath;
+  const subprojects = repositories.map((repo) => repo.worktreePath);
+
+  // Prefers the per-repository status (REFACTOR_PLAN.md PR 5b commit 21)
+  // over the deprecated single-slot gitStatus -- the single slot gets
+  // overwritten by *any* loadGitStatus() call anywhere in the app,
+  // including ones scoped to a different repository (e.g. GitPresenter's
+  // own post-action refresh, or another tab's unrelated workspace-wide
+  // reload), so it could show another repository's status for whatever
+  // moment such a call landed. Falls back to it only when this repository's
+  // own entry hasn't been loaded into statusByRepositoryId yet.
+  const gitStatus =
+    (activeRepositoryId && statusByRepositoryId[activeRepositoryId]) || gitStatusSingleSlot;
+
+  // Real HEAD state for the active repository (REFACTOR_PLAN.md PR 5b
+  // commit 22) -- branch-only actions (push/pull the current branch, merge
+  // or rebase it) have no meaning with no current branch to act on, so
+  // they're disabled with an explanation instead of being sent to the
+  // backend to fail. Defaults to "on a branch" (nothing disabled) when the
+  // repository hasn't been discovered yet, matching this PR's established
+  // fallback shape elsewhere.
+  const activeHead = activeRepository?.head ?? null;
+  const headLabel = activeHead ? formatHeadLabel(activeHead) : gitStatus?.currentBranch || "detached";
+  const disableBranchOnlyActions = activeHead ? isDetachedOrUnborn(activeHead) : false;
+  const branchOnlyActionsReason = activeHead ? branchOnlyActionsDisabledReason(activeHead) : undefined;
 
   // ── Local State ────────────────────────────────────────────
-  const [activeRepo, setActiveRepo] = useState<string>("");
-  const [subprojects, setSubprojects] = useState<string[]>([]);
   const [commitMsg, setCommitMsg] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [initLoading, setInitLoading] = useState(false);
+  const [submoduleActionLoading, setSubmoduleActionLoading] = useState<"init" | "update" | "sync" | null>(null);
   const [localBranches, setLocalBranches] = useState<string[]>([]);
   const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
@@ -74,21 +117,12 @@ const SourceControl: React.FC = () => {
 
   // ── Effects ────────────────────────────────────────────────
 
-  /** Scan for subproject Git repositories when rootPath changes. */
+  /** Discover Git repositories (workspace root, linked worktrees,
+      submodules) when rootPath changes. */
   useEffect(() => {
     if (!rootPath) return;
-
-    setActiveRepo(rootPath);
-    gitPresenter
-      .scanSubprojects(rootPath)
-      .then((repos) => {
-        const list = Array.from(new Set([rootPath, ...repos]));
-        setSubprojects(list);
-      })
-      .catch((err) => {
-        console.error("Failed to scan subprojects:", err);
-      });
-  }, [rootPath]);
+    discoverRepositories();
+  }, [rootPath, discoverRepositories]);
 
   /** Fetch local and remote branches from the Tauri backend. */
   const loadBranches = useCallback(
@@ -172,12 +206,10 @@ const SourceControl: React.FC = () => {
   /** Open the full commit graph tab. */
   const handleOpenGraph = useCallback((): void => {
     openTab({
-      id: "git-history",
       type: "git-history",
-      title: "Git Graph",
-      key: "git-history",
+      repoPath: activeRepo,
     });
-  }, [openTab]);
+  }, [openTab, activeRepo]);
 
   /** Initialise a Git repository in the current folder. */
   const handleInitializeRepo = useCallback(async (): Promise<void> => {
@@ -188,7 +220,7 @@ const SourceControl: React.FC = () => {
       await loadRepoData();
     } catch (err: any) {
       console.error("Failed to initialize git repository:", err);
-      notify("Error", `Error initializing Git: ${err}`, "error");
+      notify("Error", `Error initializing Git: ${gitErrorMessage(err)}`, "error");
     } finally {
       setInitLoading(false);
     }
@@ -225,7 +257,7 @@ const SourceControl: React.FC = () => {
 
   /** Pull latest changes from the remote. */
   const handlePull = useCallback(async (): Promise<void> => {
-    if (!activeRepo || isPulling) return;
+    if (!activeRepo || isPulling || disableBranchOnlyActions) return;
     setIsPulling(true);
     try {
       await gitPresenter.pull(activeRepo);
@@ -235,11 +267,11 @@ const SourceControl: React.FC = () => {
     } finally {
       setIsPulling(false);
     }
-  }, [activeRepo, isPulling, loadRepoData]);
+  }, [activeRepo, isPulling, disableBranchOnlyActions, loadRepoData]);
 
   /** Push local commits to the remote. */
   const handlePush = useCallback(async (): Promise<void> => {
-    if (!activeRepo || !gitStatus || isPushing) return;
+    if (!activeRepo || !gitStatus || isPushing || disableBranchOnlyActions) return;
     setIsPushing(true);
     try {
       await gitPresenter.push(activeRepo, gitStatus.currentBranch);
@@ -249,7 +281,7 @@ const SourceControl: React.FC = () => {
     } finally {
       setIsPushing(false);
     }
-  }, [activeRepo, gitStatus, isPushing, loadRepoData]);
+  }, [activeRepo, gitStatus, isPushing, disableBranchOnlyActions, loadRepoData]);
 
   /** Stage a single file. */
   const handleStageFile = useCallback(
@@ -422,6 +454,7 @@ const SourceControl: React.FC = () => {
   /** Merge a branch into the current branch. */
   const handleMergeBranch = useCallback(
     async (branchName: string): Promise<void> => {
+      if (disableBranchOnlyActions) return;
       try {
         await gitPresenter.mergeBranch(activeRepo, branchName);
         await loadRepoData();
@@ -430,12 +463,13 @@ const SourceControl: React.FC = () => {
         console.error(err);
       }
     },
-    [activeRepo, loadRepoData],
+    [activeRepo, disableBranchOnlyActions, loadRepoData],
   );
 
   /** Rebase the current branch onto another branch. */
   const handleRebaseBranch = useCallback(
     async (branchName: string): Promise<void> => {
+      if (disableBranchOnlyActions) return;
       try {
         await gitPresenter.rebaseBranch(activeRepo, branchName);
         await loadRepoData();
@@ -444,7 +478,7 @@ const SourceControl: React.FC = () => {
         console.error(err);
       }
     },
-    [activeRepo, loadRepoData],
+    [activeRepo, disableBranchOnlyActions, loadRepoData],
   );
 
   /** Abort a pending merge or rebase. */
@@ -477,25 +511,57 @@ const SourceControl: React.FC = () => {
   const handleOpenFileDiff = useCallback(
     (
       filePath: string,
-      fileName: string,
+      _fileName: string,
       diffType: "staged" | "unstaged",
     ): void => {
-      const titleSuffix = diffType === "staged" ? "Index" : "Workspace";
       openTab({
-        id: `git-diff-${filePath}-${diffType}`,
         type: "git-diff",
-        title: `${fileName} (${titleSuffix})`,
-        key: filePath,
+        repoPath: activeRepo,
+        path: filePath,
         diffType,
       });
     },
-    [openTab],
+    [openTab, activeRepo],
   );
 
   /** Switch the active repository. */
-  const handleRepoChange = useCallback((repo: string): void => {
-    setActiveRepo(repo);
-  }, []);
+  const handleRepoChange = useCallback(
+    (repo: string): void => {
+      const match = repositories.find((candidate) => candidate.worktreePath === repo);
+      setActiveRepositoryId(match ? match.id : null);
+    },
+    [repositories, setActiveRepositoryId],
+  );
+
+  /** Register/clone/re-sync the active repository's submodule
+      (REFACTOR_PLAN.md PR 5b commit 23) -- a no-op for any repository that
+      isn't a submodule, enforced by the store action itself. */
+  const handleSubmoduleAction = useCallback(
+    async (action: "init" | "update" | "sync"): Promise<void> => {
+      if (!activeRepositoryId || submoduleActionLoading) return;
+      setSubmoduleActionLoading(action);
+      try {
+        if (action === "init") await initSubmodule(activeRepositoryId);
+        else if (action === "update") await updateSubmodule(activeRepositoryId, true);
+        else await syncSubmodule(activeRepositoryId);
+        notify(
+          "Submodule updated",
+          action === "init"
+            ? "Submodule registered locally."
+            : action === "update"
+              ? "Submodule cloned/checked out."
+              : "Submodule URL synced from .gitmodules.",
+          "success",
+        );
+      } catch (err) {
+        console.error(`Submodule ${action} failed:`, err);
+        notify(`Submodule ${action} failed`, gitErrorMessage(err), "error");
+      } finally {
+        setSubmoduleActionLoading(null);
+      }
+    },
+    [activeRepositoryId, submoduleActionLoading, initSubmodule, updateSubmodule, syncSubmodule],
+  );
 
   // ── Early Returns (Empty / Non-Repo States) ───────────────
 
@@ -519,8 +585,17 @@ const SourceControl: React.FC = () => {
       <SourceControlHeader
         subprojects={subprojects}
         activeRepo={activeRepo}
+        repositories={repositories}
+        activeRepository={activeRepository}
         rootPath={rootPath}
         gitStatus={gitStatus}
+        headLabel={headLabel}
+        disableBranchOnlyActions={disableBranchOnlyActions}
+        branchOnlyActionsReason={branchOnlyActionsReason}
+        submoduleActionLoading={submoduleActionLoading}
+        onInitSubmodule={() => handleSubmoduleAction("init")}
+        onUpdateSubmodule={() => handleSubmoduleAction("update")}
+        onSyncSubmodule={() => handleSubmoduleAction("sync")}
         localBranches={localBranches}
         remoteBranches={remoteBranches}
         showBranchPopover={showBranchPopover}
@@ -543,6 +618,8 @@ const SourceControl: React.FC = () => {
           isPushing={isPushing}
           isPulling={isPulling}
           totalChanges={totalChanges}
+          disablePushPull={disableBranchOnlyActions}
+          disablePushPullReason={branchOnlyActionsReason}
           onCommitMsgChange={setCommitMsg}
           onCommit={handleCommit}
           onPull={handlePull}

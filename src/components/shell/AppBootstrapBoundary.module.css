@@ -1,0 +1,55 @@
+.screen {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-app);
+  color: var(--color-fg-default);
+}
+
+.card {
+  display: flex;
+  max-width: 32rem;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.message {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-ui-md);
+}
+
+.progress {
+  color: var(--color-fg-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.failedHeading {
+  margin: 0;
+  color: var(--color-status-danger);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 600;
+}
+
+.errorDetail {
+  max-height: 12rem;
+  overflow: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-sunken);
+  padding: var(--space-3);
+  color: var(--color-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: var(--font-size-ui-xs);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}

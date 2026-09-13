@@ -1,5 +1,10 @@
 import { createEmptyCanvasContext } from "../canvasHelpers";
+import { tabsAfterBranchChange, tabsAfterWorkspaceChange } from "../../tabs/transitions";
+import { pruneForClosedTab } from "../../tabs/policy";
+import { disposeTab } from "../../tabs/effects";
+import { canonicalizeFilePath } from "../../tabs/identity";
 import type { WorkspaceSliceCreator } from "../sliceTypes";
+import type { WorkspaceState } from "../types";
 
 export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
   rootPath: "",
@@ -21,15 +26,11 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
       }
     }
 
+    const opened = tabsAfterWorkspaceChange();
     set({
       rootPath: path,
-      editorGroups: [{
-        id: "group_0",
-        openTabs: [{ id: "canvas", type: "canvas", title: "Rusty", key: "canvas" }],
-        activeTabId: "canvas",
-      }],
-      activeGroupId: "group_0",
-      groupSizes: [1],
+      tabs: opened.tabs,
+      activeTabId: opened.activeTabId,
       canvasContexts: { canvas: createEmptyCanvasContext() },
       canvasHistories: { canvas: { past: [], future: [] } },
       expandedPaths: {},
@@ -40,33 +41,54 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
       nodeLogs: {},
       nodeStatus: {},
     });
-    void get().loadGitStatus();
-    void get().loadSkills();
-    void get().loadMetricsSummary();
+    void get().loadWorkspaceData();
     setTimeout(() => void get().saveSecureConfig(), 0);
+  },
+
+  // Extracted so the startup workspace-restore step (REFACTOR_PLAN.md PR 3a)
+  // can call exactly this and nothing else -- unlike setRootPath, restore
+  // must NOT reset tabs/canvases/nodes (that would make a retry
+  // destructive) or touch the previous_workspaces MRU or fire
+  // saveSecureConfig (the latter would race secureConfigLoaded, see
+  // createIntegrationSlice.ts). Promise.allSettled rather than three
+  // fire-and-forget calls: all three already swallow their own errors
+  // (loadGitStatus/loadSkills log and return; loadMetricsSummary's service
+  // resolves null on failure), but a future change to any one of them
+  // throwing should not silently cancel the other two.
+  loadWorkspaceData: async () => {
+    await Promise.allSettled([
+      get().loadGitStatus(),
+      get().loadSkills(),
+      get().loadMetricsSummary(),
+    ]);
   },
 
   setFileTree: (tree) => set({ fileTree: tree }),
 
-  resetForBranchChange: () => set((state) => {
-    const canvasTab = state.editorGroups
-      .flatMap((group) => group.openTabs)
-      .find((tab) => tab.type === "canvas" || tab.type === "rusty") || {
-        id: "canvas",
-        type: "canvas" as const,
-        title: "Rusty",
-        key: "canvas",
+  resetForBranchChange: () => {
+    // Dropped tabs are pruned and disposed here. The previous implementation
+    // discarded them without cleanup, leaking a canvas context, chat history
+    // and VFS instance on every branch switch.
+    const { tabs, activeTabId, dropped } = tabsAfterBranchChange(get());
+
+    set((state) => {
+      let pruned: Partial<WorkspaceState> = {};
+      for (const tab of dropped) {
+        pruned = { ...pruned, ...pruneForClosedTab(tab, { ...state, ...pruned } as WorkspaceState) };
+      }
+      return {
+        fileTree: [],
+        expandedPaths: {},
+        revealPath: null,
+        selectedNodeId: null,
+        tabs,
+        activeTabId,
+        ...pruned,
       };
-    return {
-      fileTree: [],
-      expandedPaths: {},
-      revealPath: null,
-      selectedNodeId: null,
-      editorGroups: [{ id: "group_0", openTabs: [canvasTab], activeTabId: canvasTab.id }],
-      activeGroupId: "group_0",
-      groupSizes: [1],
-    };
-  }),
+    });
+
+    for (const tab of dropped) disposeTab(tab);
+  },
 
   setPathExpanded: (path, expanded) => set((state) => ({
     expandedPaths: { ...state.expandedPaths, [path]: expanded },
@@ -78,19 +100,35 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
 
   collapseAllFolders: () => set({
     expandedPaths: {},
-    collapseAllTrigger: Date.now(),
   }),
 
   revealFileInTree: (filePath) => set((state) => {
-    const parts = filePath.split("/");
+    // canonicalizeFilePath already normalizes to forward slashes regardless
+    // of platform (REFACTOR_PLAN.md PR 7 commit 6 -- fixes a real bug: a
+    // bare `.split("/")` would never match a native Windows path here,
+    // silently expanding nothing).
+    const parts = canonicalizeFilePath(filePath).split("/");
     const expandedPaths = { ...state.expandedPaths };
     let currentPath = "";
     for (let index = 0; index < parts.length - 1; index++) {
       currentPath += (index > 0 ? "/" : "") + parts[index];
       expandedPaths[currentPath] = true;
     }
-    setTimeout(() => window.dispatchEvent(new CustomEvent("reveal-file-in-tree")), 0);
-    return { expandedPaths, revealPath: filePath };
+    return {
+      expandedPaths,
+      revealPath: filePath,
+      // Opening the drawer here -- in the SAME set() as revealPath --
+      // rather than via a setTimeout + CustomEvent that a separate
+      // AppShell listener picked up (the old handshake) is what fixes a
+      // real bug: a Source Control user pressing "Reveal in Explorer"
+      // used to have the event fire before ContextDrawer (mounted only
+      // once drawerOpen flips) existed to hear it, stranding revealPath.
+      // A same-tick synchronous update means FileTree is guaranteed to
+      // mount already reading the drawerOpen===true state that carries
+      // this revealPath.
+      drawerOpen: true,
+      drawerView: "explorer",
+    };
   }),
 
   clearRevealPath: () => set({ revealPath: null }),

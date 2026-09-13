@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  // `extends` inherits the parent's `exclude`; without clearing it here, the
+  // test files this project exists to check would themselves be excluded.
+  "exclude": [],
+  "include": ["src", "shared", "vitest.config.ts"]
+}

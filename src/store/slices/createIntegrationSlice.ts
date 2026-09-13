@@ -1,8 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { McpServerConfig } from "../../components/mcp/types";
 import { BUILT_IN_SKILLS, DEFAULT_SKILL_ID } from "../../config/skillDefinitions";
 import { skillsService } from "../../services/skillsService";
-import { resolveTheme } from "../../theme";
+import { loadStoredThemeId, saveThemeId } from "../../preferences/theme";
 import {
   normalizeStoredModelReference,
   normalizeStoredProvider,
@@ -12,18 +11,35 @@ import {
 import type { WorkspaceSliceCreator } from "../sliceTypes";
 import type { CustomProvider, LspSettings, Skill, WorkspaceState } from "../types";
 
-const THEME_STORAGE_KEY = "selected_theme";
+/**
+ * Coalesces every saveSecureConfig trigger within the same tick into one
+ * write, instead of the one-`setTimeout(…, 0)`-per-call-site pattern this
+ * replaces (REFACTOR_PLAN.md PR 3b). saveSecureConfig writes the ENTIRE
+ * encrypted blob through PBKDF2 at 100,000 iterations
+ * (services/secureStorageService.ts) -- before this fix, a single "Fetch
+ * models" click scheduled two full rewrites (updateProviderSettings, then
+ * setActiveModel), and PR 3b's background provider/model discovery would
+ * otherwise multiply that into a rewrite storm at every launch. Keyed by
+ * `get` (stable per store instance, one per app) via a WeakMap rather than
+ * a bare module-level timer, so multiple test stores created in the same
+ * process never share a pending timer.
+ */
+const pendingSaveTimers = new WeakMap<() => WorkspaceState, ReturnType<typeof setTimeout>>();
 
-function loadStoredThemeId(): string | null {
-  const storedThemeId = localStorage.getItem(THEME_STORAGE_KEY);
-  return storedThemeId ? resolveTheme(storedThemeId).id : null;
+function scheduleSaveSecureConfig(get: () => WorkspaceState): void {
+  if (pendingSaveTimers.has(get)) return;
+  const timer = setTimeout(() => {
+    pendingSaveTimers.delete(get);
+    void get().saveSecureConfig();
+  }, 0);
+  pendingSaveTimers.set(get, timer);
 }
 
-function saveThemeId(themeId: string): string {
-  const resolvedThemeId = resolveTheme(themeId).id;
-  localStorage.setItem(THEME_STORAGE_KEY, resolvedThemeId);
-  return resolvedThemeId;
-}
+/** Matches src/theme.ts's own default (`themes.spaceDust`); a bare string
+ * literal here rather than an import + resolveTheme() call, matching this
+ * file's existing `activeCustomProviderId: "opencode"` precedent -- the
+ * point is a constant with no I/O, not resolving it through the registry. */
+const DEFAULT_THEME_ID = "spaceDust";
 
 const defaultProviders: CustomProvider[] = [
   {
@@ -128,19 +144,6 @@ const defaultLspSettings: LspSettings = {
   },
 };
 
-function loadStoredMcpServers(): Record<string, McpServerConfig> {
-  try {
-    const raw = localStorage.getItem("rusty_mcp_config");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.mcpServers && typeof parsed.mcpServers === "object") return parsed.mcpServers;
-    }
-  } catch {
-    // Secure configuration loading will restore this later when available.
-  }
-  return {};
-}
-
 export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   customProviders: defaultProviders,
   activeCustomProviderId: "opencode",
@@ -148,11 +151,17 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   lspSettings: defaultLspSettings,
   skills: BUILT_IN_SKILLS,
   activeSkillId: DEFAULT_SKILL_ID,
-  mcpServers: loadStoredMcpServers(),
-  activeThemeId: loadStoredThemeId() || resolveTheme("spaceDust").id,
+  // No hydrate action needed: this was a dead read (localStorage key
+  // "rusty_mcp_config" is never written anywhere in the repo -- real MCP
+  // restore happens in loadSecureConfig below, from "rusty_secure_config").
+  // Deleted outright rather than replaced (REFACTOR_PLAN.md PR 3a).
+  mcpServers: {},
+  activeThemeId: DEFAULT_THEME_ID,
+  secureConfigLoaded: false,
+  pendingWorkspaceRestorePath: null,
 
   updateLspSettings: (settings) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { lspSettings: { ...state.lspSettings, ...settings } };
   }),
 
@@ -195,31 +204,31 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
 
   setMcpServers: (mcpServers) => {
     set({ mcpServers });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
   addMcpServer: (server) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers: { ...state.mcpServers, [server.name]: server } };
   }),
   updateMcpServer: (name, updates) => set((state) => {
     const existing = state.mcpServers[name];
     if (!existing) return {};
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers: { ...state.mcpServers, [name]: { ...existing, ...updates } } };
   }),
   removeMcpServer: (name) => set((state) => {
     const mcpServers = { ...state.mcpServers };
     delete mcpServers[name];
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { mcpServers };
   }),
 
   addCustomProvider: (provider) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return { customProviders: [...state.customProviders.filter((item) => item.id !== provider.id), provider] };
   }),
   updateProviderSettings: (providerId, settings) => set((state) => {
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
     return {
       customProviders: state.customProviders.map((provider) =>
         provider.id === providerId ? { ...provider, ...settings } : provider,
@@ -228,11 +237,11 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
   }),
   setActiveCustomProviderId: (activeCustomProviderId) => {
     set({ activeCustomProviderId });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
   setActiveModel: (activeModel) => {
     set({ activeModel });
-    setTimeout(() => void get().saveSecureConfig(), 0);
+    scheduleSaveSecureConfig(get);
   },
 
   setActiveThemeId: (themeId) => {
@@ -242,8 +251,30 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
     set({ activeThemeId });
   },
 
+  // Called from main.tsx, synchronously, before createRoot -- never at
+  // slice-creation time. Reproduces exactly the computation the old
+  // creation-time initializer ran (REFACTOR_PLAN.md PR 3a).
+  hydrateTheme: () => set({ activeThemeId: loadStoredThemeId() || DEFAULT_THEME_ID }),
+
   saveSecureConfig: async () => {
     const state = get();
+    // Guards against a real data-loss bug: saveSecureConfig writes the
+    // ENTIRE snapshot (providers/API keys/lastWorkspacePath/MCP servers),
+    // and nine call sites in this file schedule it (via
+    // scheduleSaveSecureConfig, above) on nearly every settings mutation.
+    // Before loadSecureConfig has completed (or
+    // if it failed and the user clicked "Continue anyway"), the store is
+    // still holding defaultProviders with empty apiKeys and rootPath: "" --
+    // writing that over a real, previously-saved encrypted blob would
+    // silently destroy it. secureConfigLoaded is set only once
+    // loadSecureConfig finishes (REFACTOR_PLAN.md PR 3a).
+    if (!state.secureConfigLoaded) {
+      console.warn(
+        "saveSecureConfig: skipped -- secure config has not finished loading yet " +
+        "(saving now would overwrite it with incomplete/default state).",
+      );
+      return;
+    }
     const { SecureStorageService } = await import("../../services/secureStorageService");
     await SecureStorageService.saveSecureData("rusty_secure_config", {
       configVersion: PROVIDER_CONFIG_VERSION,
@@ -268,7 +299,13 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
       mcpServers?: Record<string, McpServerConfig>;
       lspSettings?: LspSettings;
     }>("rusty_secure_config");
-    if (!config) return;
+    if (!config) {
+      // Nothing has ever been saved (e.g. a fresh install) -- that is a
+      // successfully "loaded" (empty) state, not a failure, so saving is
+      // safe from here on.
+      set({ secureConfigLoaded: true });
+      return;
+    }
 
     const updates: Partial<WorkspaceState> = {};
     const configVersion = config.configVersion || 0;
@@ -286,7 +323,17 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
               ...savedProvider,
               baseUrl: savedProvider.baseUrl || defaultProvider.baseUrl,
               catalogUrl: savedProvider.catalogUrl || defaultProvider.catalogUrl,
-              models: savedProvider.models?.length ? savedProvider.models : defaultProvider.models,
+              // modelsFetchedAt present means discovery has actually run at
+              // least once for this provider -- trust its saved models even
+              // when empty, rather than the old behavior (REFACTOR_PLAN.md
+              // PR 3b) of silently falling back to the hardcoded defaults
+              // for ANY empty saved array, which made "never discovered"
+              // and "discovered and legitimately empty" indistinguishable.
+              // Absent (an older saved config, or one that's simply never
+              // been through discoverModels()) keeps the old fallback.
+              models: savedProvider.modelsFetchedAt
+                ? savedProvider.models
+                : (savedProvider.models?.length ? savedProvider.models : defaultProvider.models),
             }
           : defaultProvider;
       });
@@ -315,16 +362,15 @@ export const createIntegrationSlice: WorkspaceSliceCreator = (set, get) => ({
       // Migrate themes saved before the dedicated preference became canonical.
       updates.activeThemeId = saveThemeId(config.activeThemeId);
     }
+    // The actual restore (a Tauri invoke, then loadWorkspaceData) is a
+    // separate startup step (components/shell/startupSteps.ts's
+    // "workspace-restore", dependsOn: ["secure-config"]) rather than inline
+    // here -- it needs its own, longer timeout budget and must not be able
+    // to make this step's OWN critical failure/timeout depend on a slow
+    // directory listing. That step is also secureConfigLoaded's sole owner
+    // for the "a saved path exists" case (REFACTOR_PLAN.md PR 3a); this
+    // action only records the candidate path for it to pick up.
+    updates.pendingWorkspaceRestorePath = config.lastWorkspacePath || null;
     set(updates);
-
-    if (config.lastWorkspacePath) {
-      try {
-        const fileTree: any[] = await invoke("get_directory_structure", { rootDir: config.lastWorkspacePath });
-        set({ rootPath: config.lastWorkspacePath, fileTree });
-        await get().loadGitStatus();
-      } catch (error) {
-        console.error("Failed to load last workspace folder:", error);
-      }
-    }
   },
 });

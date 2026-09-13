@@ -19,7 +19,8 @@ import { WebSocket } from "ws";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { safeSend } from "../services/websocket";
-import { executeCommand } from "../services/commandExecution";
+import { executeCommand, stopCommandsForSession } from "../services/commandExecution";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { callLlmWithToolsPiStreaming } from "../services/llmRuntime";
 import type { NormalizedCommand } from "../services/commandPermissions";
 import { createUsageReporter } from "../services/usageBroadcast";
@@ -34,9 +35,40 @@ export function getTestBuildStreamId(tabId: string): string {
   return `__test_build__:${tabId}`;
 }
 
+// Same rationale as globalExplore.ts/reconciliateEdge.ts's fixes: the model
+// fix-attempt call's shouldAbort only polled the per-run socket's readyState,
+// which no longer trips per-run now every capability shares one connection.
+// The build subprocess itself, though, already has real cancellation via
+// executeCommand's own session tracking (keyed by streamId) --
+// stopCommandsForSession kills the actual child process, not just a flag.
+const activeTestBuilds = new Set<string>();
+const cancelledTestBuilds = new Set<string>();
+
+/** Real cancellation for a test_build run: kills any in-flight build/diagnostic
+ *  subprocess and flags the model fix-attempt loop to stop. Returns whether a
+ *  run was active. */
+export function stopTestBuild(tabId: string): boolean {
+  const wasActive = activeTestBuilds.has(tabId);
+  cancelledTestBuilds.add(tabId);
+  stopCommandsForSession(getTestBuildStreamId(tabId));
+  return wasActive;
+}
+
 export async function testBuild(ws: WebSocket, data: any): Promise<void> {
   const { tabId, buildCommand, workspaceRoot, reconciledFiles, model, customProvider } = data;
+
+  try {
+    requireString(tabId, "tabId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "test_build_error", nodeId: String(tabId || "unknown"), error: error.message });
+    return;
+  }
+
   const streamId = getTestBuildStreamId(tabId);
+  activeTestBuilds.add(tabId);
+  cancelledTestBuilds.delete(tabId);
 
   const sendLog = (message: string) => {
     console.log(`[TestBuild] ${message}`);
@@ -51,6 +83,7 @@ export async function testBuild(ws: WebSocket, data: any): Promise<void> {
   const parts = String(buildCommand || "").trim().split(/\s+/).filter(Boolean);
   if (!parts.length) {
     sendError("No build command provided.");
+    activeTestBuilds.delete(tabId);
     return;
   }
 
@@ -59,6 +92,7 @@ export async function testBuild(ws: WebSocket, data: any): Promise<void> {
     : [];
   if (!filePaths.length) {
     sendError("No reconciled files to test.");
+    activeTestBuilds.delete(tabId);
     return;
   }
 
@@ -71,7 +105,7 @@ export async function testBuild(ws: WebSocket, data: any): Promise<void> {
 
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      if (ws.readyState !== WebSocket.OPEN) return;
+      if (ws.readyState !== WebSocket.OPEN || cancelledTestBuilds.has(tabId)) return;
 
       sendLog(`--- Build attempt ${attempt}/${MAX_ATTEMPTS} ---`);
       safeSend(ws, { type: "test_build_iteration", nodeId: streamId, attempt, maxAttempts: MAX_ATTEMPTS });
@@ -213,7 +247,7 @@ Read the affected files and fix the errors so the build passes.`;
         maxRounds: 30,
         cwd: workspaceRoot,
         history: [],
-        shouldAbort: () => ws.readyState !== WebSocket.OPEN,
+        shouldAbort: () => ws.readyState !== WebSocket.OPEN || cancelledTestBuilds.has(tabId),
         onUsage: createUsageReporter(ws, {
           workspaceRoot,
           surface: "test_build",
@@ -234,6 +268,9 @@ Read the affected files and fix the errors so the build passes.`;
   } catch (err: any) {
     console.error("[TestBuild] Unexpected error:", err);
     sendError(err?.message || String(err));
+  } finally {
+    activeTestBuilds.delete(tabId);
+    cancelledTestBuilds.delete(tabId);
   }
 }
 

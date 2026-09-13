@@ -16,6 +16,8 @@ import {
   EyeOff
 } from "lucide-react";
 import { useWorkspaceStore } from "../store";
+import { selectActiveFilePath, selectActiveTabId } from "../store/tabSelectors";
+import { fileTabIdentity } from "../tabs/identity";
 import { FileIcon } from "../services/fileTypeService";
 import { invoke } from "@tauri-apps/api/core";
 import { MoveDialog } from "./MoveDialog";
@@ -23,6 +25,7 @@ import { CreateDialog } from "./CreateDialog";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { gitPresenter } from "./git/GitPresenter";
+import { resolveRepositoryForPath } from "./git/resolveRepositoryForPath";
 
 import { fileTreePresenter, refreshTree } from "./filetree/FileTreePresenter";
 
@@ -103,8 +106,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
   const treeContainerRef = useRef<HTMLDivElement>(null);
   const revealPath = useWorkspaceStore((state) => state.revealPath);
   const clearRevealPath = useWorkspaceStore((state) => state.clearRevealPath);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
+  const activeFilePath = useWorkspaceStore(selectActiveFilePath);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
  
   const { confirm, ConfirmModalComponent } = useConfirm();
@@ -153,12 +155,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
       }
       return;
     }
-    useWorkspaceStore.getState().openTab({
-      id: `file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      type: "file",
-      title: node.name,
-      key: node.path,
-    });
+    useWorkspaceStore.getState().openTab({ type: "file", path: node.path, title: node.name });
   };
 
   const activateEntry = (node: FileEntry) => {
@@ -330,20 +327,27 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
   };
 
   const handleAddToGit = async (node: any) => {
-    const rootPath = useWorkspaceStore.getState().rootPath;
-    if (!rootPath) return;
+    const state = useWorkspaceStore.getState();
+    // Resolves the file's own repository (REFACTOR_PLAN.md PR 5b commit 20)
+    // instead of always staging against the workspace root -- staging a
+    // file that lives inside a submodule against the wrong repository would
+    // either no-op or, worse, silently stage the submodule's own gitlink
+    // path instead of the file the user actually clicked.
+    const targetRepo = resolveRepositoryForPath(node.path, state.repositories)?.worktreePath ?? state.rootPath;
+    if (!targetRepo) return;
     try {
-      await gitPresenter.stageFile(rootPath, node.path);
+      await gitPresenter.stageFile(targetRepo, node.path);
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleAddToGitignore = async (node: any) => {
-    const rootPath = useWorkspaceStore.getState().rootPath;
-    if (!rootPath) return;
+    const state = useWorkspaceStore.getState();
+    const targetRepo = resolveRepositoryForPath(node.path, state.repositories)?.worktreePath ?? state.rootPath;
+    if (!targetRepo) return;
     try {
-      await gitPresenter.addToGitignore(rootPath, node.path);
+      await gitPresenter.addToGitignore(targetRepo, node.path);
     } catch (err) {
       console.error(err);
     }
@@ -392,10 +396,8 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
         <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wide">Files</span>
         <button
           onClick={() => {
-            const activeGroup = editorGroups.find((g) => g.id === activeGroupId);
-            const activeTab = activeGroup?.openTabs.find((t) => t.id === activeGroup.activeTabId);
-            if (activeTab?.key) {
-              revealFileInTree(activeTab.key);
+            if (activeFilePath) {
+              revealFileInTree(activeFilePath);
             }
           }}
           className="text-[9px] font-mono text-[var(--text-muted)] hover:text-[var(--text-light)] hover:bg-[var(--accent-bg)] px-1.5 py-0.5 rounded transition-colors cursor-pointer flex items-center space-x-1"
@@ -567,10 +569,9 @@ const FileTreeNode: React.FC<{
 }> = ({ node, onContextMenu, renamingPath, onRenameComplete, onCreateRequest, selectedPaths, focusedPath, onEntryClick, onDragSelection, onMovePaths }) => {
   const expandedPaths = useWorkspaceStore((state) => state.expandedPaths);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
-  const editorGroups = useWorkspaceStore((state) => state.editorGroups);
-  const activeGroupId = useWorkspaceStore((state) => state.activeGroupId);
-  const activeGroup = editorGroups.find((g) => g.id === activeGroupId);
-  const activeTabId = activeGroup ? activeGroup.activeTabId : null;
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  const statusByRepositoryId = useWorkspaceStore((state) => state.statusByRepositoryId);
+  const activeTabId = useWorkspaceStore(selectActiveTabId);
 
   const [tempName, setTempName] = useState(node.name);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -580,8 +581,22 @@ const FileTreeNode: React.FC<{
   const isOpen = !!expandedPaths[node.path];
   const isSelected = selectedPaths.has(node.path);
   const isFocused = focusedPath === node.path;
-  const gitState = getGitState(node, gitStatus);
-  const isActiveFile = activeTabId === `file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  // Resolves this node's owning repository (REFACTOR_PLAN.md PR 5b commit
+  // 20) so a submodule's own files get their submodule's status, not the
+  // workspace root's. Only actually switches away from the deprecated
+  // single-slot gitStatus for a non-"workspace" repository (a submodule or
+  // linked worktree) -- for every ordinary node (the overwhelming common
+  // case, and the only one before this PR) this is exactly the same value
+  // gitStatus already held, so nothing regresses while
+  // statusByRepositoryId is still being populated lazily (see
+  // loadGitStatus's mirroring comment in createGitSlice.ts).
+  const resolvedRepo = resolveRepositoryForPath(node.path, repositories);
+  const nodeGitStatus =
+    resolvedRepo && resolvedRepo.kind !== "workspace"
+      ? statusByRepositoryId[resolvedRepo.id] ?? null
+      : gitStatus;
+  const gitState = getGitState(node, nodeGitStatus);
+  const isActiveFile = activeTabId === fileTabIdentity(node.path);
 
   useEffect(() => {
     if (isRenaming) {
@@ -619,7 +634,7 @@ const FileTreeNode: React.FC<{
       await invoke("move_file_or_dir", { src: node.path, dest: newPath });
       await refreshTree();
       const state = useWorkspaceStore.getState();
-      state.closeTab(`file_${node.path.replace(/[^a-zA-Z0-9]/g, "_")}`);
+      state.closeTab(fileTabIdentity(node.path));
       // Track for undo
       state.setLastRename({ originalPath: node.path, newPath });
       state.loadGitStatus();

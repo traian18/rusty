@@ -7,17 +7,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { Chat, SubagentActivity } from "../ui/Chat";
 import { AgentQuestion, ChatInput } from "../ui/ChatInput";
 import { notify } from "../../notificationStore";
-import { commandPermissionService, handleCommandPermissionMessage } from "../../services/commandPermissionService";
 import { scheduleTreeRefresh } from "../filetree/FileTreePresenter";
 import { appendBoundedText } from "../../services/boundedTextBuffer";
-import { providerHasModelReference, selectableProviderModels } from "../../store/providerHelpers";
-import { createAgentHarnessSocket } from "../../services/agentHarnessClient";
-import { SIDECAR_PORT } from "../../config/sidecar";
+import { useSelectableModels } from "../../hooks/useSelectableModels";
+import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
+import { agentChatService, AgentChatRun } from "../../services/agentChatService";
+import { agentHarnessClient } from "../../services/agentHarnessClient";
+import { registerTabStop, unregisterTabStop } from "../../tabs/tabStopRegistry";
 import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
+import type { TabOfType } from "../../tabs/types";
 
 interface AgentTabProps {
-  tab: any;
-  groupId: string;
+  tab: TabOfType<"agent">;
 }
 
 interface SavedChat {
@@ -28,9 +29,10 @@ interface SavedChat {
   messageCount: number;
 }
 
-export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) => {
+export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const customProviders = useWorkspaceStore((state) => state.customProviders);
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
+  const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const activeModel = useWorkspaceStore((state) => state.activeModel);
   const setActiveModel = useWorkspaceStore((state) => state.setActiveModel);
   const agentChats = useWorkspaceStore((state) => state.agentChats[tab.id] || []);
@@ -45,6 +47,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
   const skills = useWorkspaceStore((state) => state.skills);
   const activeSkillId = useWorkspaceStore((state) => state.activeSkillId);
   const setActiveSkill = useWorkspaceStore((state) => state.setActiveSkill);
+  const setAgentTabBusy = useWorkspaceStore((state) => state.setAgentTabBusy);
 
   const [selectedModel, setSelectedModel] = useState(activeModel);
   const [selectedSkillId, setSelectedSkillId] = useState<string>(activeSkillId || DEFAULT_SKILL_ID);
@@ -67,7 +70,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [activeChatPath, setActiveChatPath] = useState<string | null>(null);
 
-  const agentSocketRef = useRef<WebSocket | null>(null);
+  const agentRunRef = useRef<AgentChatRun | null>(null);
   const consoleMessageIdRef = useRef<string | null>(null);
   const consoleBufferRef = useRef<string>("");
   const streamingResponseMessageIdRef = useRef<string | null>(null);
@@ -80,19 +83,28 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
   const lastUserMessageIdRef = useRef<string | null>(null);
   const lastConsoleMessageIdRef = useRef<string | null>(null);
 
-  const modelOptions = selectableProviderModels(customProviders, activeCustomProviderId)
-    .map(({ model }) => ({
-      id: model.id,
-      name: `${model.name} (${model.id})`,
-    }));
+  const { options: modelOptions, unauthenticatedProviders } = useSelectableModels(
+    customProviders,
+    providerStatus,
+    activeCustomProviderId,
+  );
+  const modelPlaceholder = modelOptions.length === 0 && unauthenticatedProviders.length > 0
+    ? `Sign in to ${unauthenticatedProviders.map((p) => p.name).join(", ")} to see more models`
+    : "Select model";
 
+  // Local-only correction (REFACTOR_PLAN.md PR 3c): if the current
+  // selection isn't in THIS tab's option list, fall back locally --
+  // this used to also call the global setActiveModel, which meant merely
+  // mounting an Agent tab (or its option list changing) could silently
+  // rewrite what every other tab defaults to. The read direction is kept:
+  // when the global activeModel changes (e.g. from LlmSetupTab, the
+  // canonical setter), this still re-derives selectedModel from it.
   useEffect(() => {
     const nextModel = modelOptions.some((option) => option.id === activeModel)
       ? activeModel
       : modelOptions[0]?.id || "";
     setSelectedModel(nextModel);
-    if (nextModel !== activeModel) setActiveModel(nextModel);
-  }, [activeCustomProviderId, activeModel, customProviders, setActiveModel]);
+  }, [activeCustomProviderId, activeModel, customProviders, providerStatus]);
 
   useEffect(() => {
     // Always ensure a skill is selected. Resolution order:
@@ -113,16 +125,28 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
     return () => {
       if (consoleFlushTimeoutRef.current) clearTimeout(consoleFlushTimeoutRef.current);
       if (streamingResponseFlushTimeoutRef.current) clearTimeout(streamingResponseFlushTimeoutRef.current);
-      const socket = agentSocketRef.current;
-      if (socket) {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "command_session_close", sessionId: tab.id }));
-        }
-        commandPermissionService.removeForSocket(socket);
-        socket.close();
+      if (agentRunRef.current) {
+        // command_session_close has no equivalent in agentChatService's
+        // callback surface (it isn't a run event, it's a standing
+        // instruction to stop any lingering commands for this tab's
+        // session) -- sent directly through the shared connection, same as
+        // it always was, just not through a per-tab socket anymore.
+        void agentHarnessClient.send({ type: "command_session_close", sessionId: tab.id });
+        agentRunRef.current.cancel();
+        agentRunRef.current = null;
       }
     };
   }, [tab.id]);
+
+  // Mirrors isAgentBusy into the store (REFACTOR_PLAN.md PR 7 commit 2) so
+  // the `agent` tab policy -- a pure function with no component access --
+  // can implement isBusy/beforeClose the same way `canvas`'s already does.
+  // Cleared on unmount so a stale `true` can never linger for the next
+  // Agent tab (this is a singleton id, reused every time one is reopened).
+  useEffect(() => {
+    setAgentTabBusy(tab.id, isAgentBusy);
+    return () => setAgentTabBusy(tab.id, false);
+  }, [tab.id, isAgentBusy, setAgentTabBusy]);
 
   // ── Chat History ──────────────────────────────────────────────
   const loadChatHistory = useCallback(async () => {
@@ -242,12 +266,8 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
   };
 
   const handleStopExecution = () => {
-    if (agentSocketRef.current) {
-      if (agentSocketRef.current.readyState === WebSocket.OPEN) {
-        agentSocketRef.current.send(JSON.stringify({ type: "agent_chat_stop", tabId: tab.id }));
-      }
-      window.setTimeout(() => agentSocketRef.current?.close(), 250);
-    }
+    agentRunRef.current?.cancel();
+    agentRunRef.current = null;
 
     // Clean up the unfinished/stopped messages from store
     const currentChats = useWorkspaceStore.getState().agentChats[tab.id] || [];
@@ -286,14 +306,22 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
     refreshHistoryAfterSave();
   };
 
+  // Registers this tab's stop callback (REFACTOR_PLAN.md PR 7 commit 2) so
+  // the close-intercept controller can generically say "stop whatever this
+  // tab is running" without knowing it's an Agent tab specifically. A ref
+  // holds the latest `handleStopExecution` closure so the registration
+  // itself doesn't need to churn every render.
+  const stopExecutionRef = useRef(handleStopExecution);
+  stopExecutionRef.current = handleStopExecution;
+  useEffect(() => {
+    registerTabStop(tab.id, () => stopExecutionRef.current());
+    return () => unregisterTabStop(tab.id);
+  }, [tab.id]);
+
   const handleAgentQuestionAnswer = (answer: string) => {
-    if (agentQuestions.length === 0 || !agentSocketRef.current || agentSocketRef.current.readyState !== WebSocket.OPEN) return;
+    if (agentQuestions.length === 0 || !agentRunRef.current) return;
     const currentQuestion = agentQuestions[0];
-    agentSocketRef.current.send(JSON.stringify({
-      type: "agent_question_response",
-      requestId: currentQuestion.requestId,
-      answer,
-    }));
+    agentRunRef.current.answerQuestion(currentQuestion.requestId, answer);
     consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `User answer: ${answer}\n`);
     if (consoleMessageIdRef.current) {
       updateAgentMessage(tab.id, consoleMessageIdRef.current, consoleBufferRef.current);
@@ -347,49 +375,43 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
     isStreamingRef.current = true;
     setIsStreaming(true);
 
-    let socket: WebSocket;
-    try {
-      socket = createAgentHarnessSocket();
-      agentSocketRef.current = socket;
-    } catch (err: any) {
-      console.error("Failed to construct Agent WebSocket:", err);
+    const wsRootPath = useWorkspaceStore.getState().rootPath;
+    const currentProviders = useWorkspaceStore.getState().customProviders;
+    const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
+    const currentProviderStatus = useWorkspaceStore.getState().providerStatus;
+    const resolution = resolveExecutionProvider(
+      currentProviders,
+      currentProviderStatus,
+      currentActiveProviderId,
+      selectedModel,
+    );
+    if (!resolution.ok) {
       addAgentMessage(tab.id, {
         id: `msg_${Date.now()}`,
         role: "assistant" as const,
-        content: `Connection failed: ${err.message || String(err)}`,
+        content: resolution.message,
         timestamp: new Date().toISOString(),
       });
       isStreamingRef.current = false;
       setIsStreaming(false);
-      notify(
-        "Sidecar Connection Error",
-        `Failed to create WebSocket connection to sidecar: ${err.message || String(err)}. Ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
+      notify("Cannot send message", resolution.message, "error");
       return;
     }
+    const prov = resolution.provider;
+    const chatHistory = useWorkspaceStore.getState().agentChats[tab.id] || [];
+    const currentSkills = useWorkspaceStore.getState().skills;
+    const resolved = resolveSkill(currentSkills, selectedSkillId);
+    const skillData = toSkillData(resolved);
 
-    socket.onopen = () => {
-      const wsRootPath = useWorkspaceStore.getState().rootPath;
-      const currentProviders = useWorkspaceStore.getState().customProviders;
-      const currentActiveProviderId = useWorkspaceStore.getState().activeCustomProviderId;
-      const prov = currentProviders.find((provider) =>
-        providerHasModelReference(provider, selectedModel)
-      ) || currentProviders.find((provider) => provider.id === currentActiveProviderId);
-      const chatHistory = useWorkspaceStore.getState().agentChats[tab.id] || [];
-      const currentSkills = useWorkspaceStore.getState().skills;
-      const resolved = resolveSkill(currentSkills, selectedSkillId);
-      const skillData = toSkillData(resolved);
+    // Resolve MCP servers declared in the active skill.
+    const mcpServersMap = useWorkspaceStore.getState().mcpServers;
+    const skillMcpNames: string[] = resolved?.mcpServers || [];
+    const mcpServers = skillMcpNames
+      .map((name: string) => mcpServersMap[name])
+      .filter((srv: any): srv is NonNullable<typeof srv> => !!srv);
 
-      // Resolve MCP servers declared in the active skill.
-      const mcpServersMap = useWorkspaceStore.getState().mcpServers;
-      const skillMcpNames: string[] = resolved?.mcpServers || [];
-      const mcpServers = skillMcpNames
-        .map((name: string) => mcpServersMap[name])
-        .filter((srv: any): srv is NonNullable<typeof srv> => !!srv);
-
-      socket.send(JSON.stringify({
-        type: "agent_chat",
+    const run = agentChatService.send(
+      {
         tabId: tab.id,
         message: messageToSend,
         model: selectedModel,
@@ -397,39 +419,29 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
         chatHistory: chatHistory
           .filter((m: any) => m.role === "user" || m.role === "assistant")
           .map((m: any) => ({ role: m.role, content: m.content })),
-        customProvider: prov || null,
+        customProvider: prov,
         skill: skillData,
         mcpServers,
+        planOnly: false,
+        vfsOnly: false,
         lspSettings: { ...useWorkspaceStore.getState().lspSettings, enabled: false },
-      }));
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        if (handleCommandPermissionMessage(msg, socket)) return;
-
-        if (msg.type === "command_output" && msg.sessionId === tab.id) {
-          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, msg.content);
+      },
+      {
+        onCommandOutput: (content) => {
+          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, content);
           scheduleConsoleFlush();
-          return;
-        }
-        if (msg.type === "command_complete" && msg.sessionId === tab.id) {
+        },
+        onCommandComplete: () => {
           scheduleTreeRefresh();
-          return;
-        }
-
-        if (msg.type === "log" && msg.tabId === tab.id) {
-          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `${msg.message}\n`);
+        },
+        onLog: (message) => {
+          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `${message}\n`);
           scheduleConsoleFlush();
-          return;
-        }
-
-        if (msg.type === "token" && msg.tabId === tab.id) {
+        },
+        onToken: (content) => {
           streamingResponseBufferRef.current = appendBoundedText(
             streamingResponseBufferRef.current,
-            msg.content,
+            content,
             500_000,
           );
           if (!streamingResponseMessageIdRef.current) {
@@ -444,18 +456,12 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
           } else {
             scheduleStreamingResponseFlush();
           }
-          return;
-        }
-
-        if (msg.type === "usage_update" && msg.tabId === tab.id) {
-          setRunUsage(msg.usage);
-          return;
-        }
-
-        if (msg.type === "subagent_update" && msg.tabId === tab.id && msg.subagent?.id) {
+        },
+        onSubagentUpdate: (subagent) => {
+          if (!(subagent as any)?.id) return;
           const incoming = {
-            ...msg.subagent,
-            updatedAt: msg.subagent.updatedAt || new Date().toISOString(),
+            ...(subagent as any),
+            updatedAt: (subagent as any).updatedAt || new Date().toISOString(),
           } as SubagentActivity & { previousId?: string; appendLog?: string; logs?: string[] };
           setSubagents((prev) => {
             const index = prev.findIndex((item) =>
@@ -480,64 +486,18 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
             next[index] = { ...next[index], ...cleanIncoming, id: incoming.id, logs: mergedLogs.slice(-200) };
             return next;
           });
-          return;
-        }
-
-        if (msg.type === "agent_question" && msg.tabId === tab.id && msg.requestId) {
-          const newQuestion = {
-            requestId: msg.requestId,
-            question: String(msg.question || "The agent needs your input."),
-            options: Array.isArray(msg.options) ? msg.options : [],
-          };
+        },
+        onAgentQuestion: (question) => {
           setAgentQuestions((prev) => {
-            if (prev.some((q) => q.requestId === newQuestion.requestId)) return prev;
-            return [...prev, newQuestion];
+            if (prev.some((q) => q.requestId === question.requestId)) return prev;
+            return [...prev, question];
           });
-          return;
-        }
-
-        if (msg.type === "read_file") {
-          invoke("read_file_disk", { path: msg.path }).then((content: unknown) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "read_file_response",
-                requestId: msg.requestId,
-                content: content as string
-              }));
-            }
-          }).catch((err: any) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "read_file_response",
-                requestId: msg.requestId,
-                error: err.message || String(err)
-              }));
-            }
-          });
-          return;
-        }
-
-        if (msg.type === "write_file") {
-          invoke("write_file_disk", { path: msg.path, content: msg.content }).then(() => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "write_file_response",
-                requestId: msg.requestId,
-              }));
-            }
-          }).catch((err: any) => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: "write_file_response",
-                requestId: msg.requestId,
-                error: err.message || String(err)
-              }));
-            }
-          });
-          return;
-        }
-
-        if (msg.type === "agent_chat_complete" && msg.tabId === tab.id) {
+        },
+        onReadFile: (path) => invoke<string>("read_file_disk", { path }),
+        onWriteFile: async (path, content) => {
+          await invoke("write_file_disk", { path, content });
+        },
+        onComplete: ({ response, modifiedFiles: files, subagents: completedSubagents }) => {
           if (consoleFlushTimeoutRef.current) {
             clearTimeout(consoleFlushTimeoutRef.current);
             consoleFlushTimeoutRef.current = null;
@@ -547,19 +507,11 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
             clearTimeout(streamingResponseFlushTimeoutRef.current);
             streamingResponseFlushTimeoutRef.current = null;
           }
-          const files = msg.modifiedFiles || [];
           setModifiedFiles(files);
-
-          files.forEach((filePath: string) => {
+          files.forEach((filePath) => {
             const fileName = filePath.split("/").pop() || filePath;
-            openTab({
-              id: `file_${filePath.replace(/[^a-zA-Z0-9]/g, "_")}`,
-              type: "file",
-              title: fileName,
-              key: filePath,
-            });
+            openTab({ type: "file", path: filePath, title: fileName });
           });
-
           if (files.length > 0 && rootPath) {
             invoke("get_directory_structure", { rootDir: rootPath }).then((tree: any) => {
               setFileTree(tree);
@@ -567,40 +519,38 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
             });
           }
 
-          const responseContent = msg.response || "Agent complete.";
-          if (Array.isArray(msg.subagents)) {
+          const finalResponse = response || "Agent complete.";
+          if (completedSubagents.length > 0) {
             // The completed response can contain each subagent's full result.
             // Keep the panel focused on status and its last few activity lines.
-            setSubagents(msg.subagents.map((subagent: SubagentActivity) => ({
+            setSubagents((completedSubagents as SubagentActivity[]).map((subagent) => ({
               ...subagent,
               logs: (subagent.logs || []).slice(-4),
             })));
           }
+          isStreamingRef.current = false;
+          lastUserMessageIdRef.current = null;
+          lastConsoleMessageIdRef.current = null;
           if (streamingResponseMessageIdRef.current) {
-            updateAgentMessage(tab.id, streamingResponseMessageIdRef.current, responseContent);
+            updateAgentMessage(tab.id, streamingResponseMessageIdRef.current, finalResponse);
           } else {
             addAgentMessage(tab.id, {
               id: `msg_${Date.now()}`,
               role: "assistant" as const,
-              content: responseContent,
+              content: finalResponse,
               timestamp: new Date().toISOString(),
             });
           }
-
-          isStreamingRef.current = false;
-          lastUserMessageIdRef.current = null;
-          lastConsoleMessageIdRef.current = null;
           streamingResponseMessageIdRef.current = null;
           streamingResponseBufferRef.current = "";
           setIsStreaming(false);
           setAgentQuestions([]);
+          agentRunRef.current = null;
           saveChatHistory();
           refreshHistoryAfterSave();
-          return;
-        }
-
-        if (msg.type === "agent_chat_error" && msg.tabId === tab.id) {
-          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `Error: ${msg.error}\n`);
+        },
+        onError: (message) => {
+          consoleBufferRef.current = appendBoundedText(consoleBufferRef.current, `Error: ${message}\n`);
           if (consoleFlushTimeoutRef.current) clearTimeout(consoleFlushTimeoutRef.current);
           consoleFlushTimeoutRef.current = null;
           flushConsoleBuffer();
@@ -611,7 +561,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
           addAgentMessage(tab.id, {
             id: `msg_${Date.now()}`,
             role: "assistant" as const,
-            content: `Error: ${msg.error}`,
+            content: `Error: ${message}`,
             timestamp: new Date().toISOString(),
           });
           isStreamingRef.current = false;
@@ -621,83 +571,17 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
           streamingResponseBufferRef.current = "";
           setIsStreaming(false);
           setAgentQuestions([]);
-          socket.close();
-          notify("Agent Error", `The agent encountered an error: ${msg.error}`, "error");
-        }
-      } catch (err: any) {
-        console.error(`[AgentTab] Parse error:`, err);
-        notify(
-          "Communication Error",
-          `Failed to process message from agent sidecar: ${err.message || String(err)}`,
-          "error"
-        );
+          agentRunRef.current = null;
+          notify("Agent Error", `The agent encountered an error: ${message}`, "error");
+        },
       }
-    };
-
-    socket.onerror = () => {
-      consoleBufferRef.current = appendBoundedText(
-        consoleBufferRef.current,
-        `Connection to agent sidecar failed. Ensure sidecar is running on port ${SIDECAR_PORT}.\n`,
-      );
-      if (consoleMessageIdRef.current) {
-        updateAgentMessage(tab.id, consoleMessageIdRef.current, consoleBufferRef.current);
-      }
-      addAgentMessage(tab.id, {
-        id: `msg_${Date.now()}`,
-        role: "assistant" as const,
-        content: `Connection failed. Please ensure the agent sidecar is running on port ${SIDECAR_PORT}.`,
-        timestamp: new Date().toISOString(),
-      });
-      isStreamingRef.current = false;
-      lastUserMessageIdRef.current = null;
-      lastConsoleMessageIdRef.current = null;
-      streamingResponseMessageIdRef.current = null;
-      streamingResponseBufferRef.current = "";
-      setIsStreaming(false);
-      setAgentQuestions([]);
-      notify(
-        "Sidecar Connection Failed",
-        `Connection to agent sidecar closed unexpectedly. Ensure agent sidecar is running on port ${SIDECAR_PORT}.`,
-        "error"
-      );
-    };
-
-    socket.onclose = (event) => {
-      commandPermissionService.removeForSocket(socket);
-      console.log(`[AgentTab] WebSocket closed (code: ${event.code})`);
-
-      if (isStreamingRef.current) {
-        addAgentMessage(tab.id, {
-          id: `msg_${Date.now()}`,
-          role: "assistant" as const,
-          content: "Connection closed unexpectedly.",
-          timestamp: new Date().toISOString(),
-        });
-        isStreamingRef.current = false;
-        lastUserMessageIdRef.current = null;
-        lastConsoleMessageIdRef.current = null;
-        streamingResponseMessageIdRef.current = null;
-        streamingResponseBufferRef.current = "";
-        setIsStreaming(false);
-        setAgentQuestions([]);
-        notify(
-          "Connection Lost",
-          `The sidecar connection was closed abnormally (code: ${event.code}).`,
-          "error"
-        );
-      }
-      agentSocketRef.current = null;
-    };
+    );
+    agentRunRef.current = run;
   };
 
   const handleOpenModifiedFile = (filePath: string) => {
     const fileName = filePath.split("/").pop() || filePath;
-    openTab({
-      id: `file_${filePath.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      type: "file",
-      title: fileName,
-      key: filePath,
-    });
+    openTab({ type: "file", path: filePath, title: fileName });
   };
 
   const saveChatHistory = async () => {
@@ -833,7 +717,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab, groupId: _groupId }) =>
                 setActiveModel(model);
               }}
               options={modelOptions}
-              placeholder="Select model"
+              placeholder={modelPlaceholder}
               className="w-64"
             />
             <CustomSelect

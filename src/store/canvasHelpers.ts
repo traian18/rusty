@@ -1,4 +1,18 @@
+import type { TabInstance } from "../tabs/types";
 import type { CanvasContext, CanvasHistory, CanvasHistorySnapshot, WorkspaceState } from "./types";
+
+/**
+ * The minimum shape these helpers need. Deliberately structural rather than
+ * `WorkspaceState`: several callers pass a synthetic `{ ...state, canvasContexts }`
+ * while computing an update, and widening the parameter is what keeps those
+ * call sites working unchanged.
+ */
+export interface CanvasTabLookupState {
+  tabs: TabInstance[];
+  activeTabId: string | null;
+  canvasContexts: Record<string, CanvasContext>;
+  canvasHistories?: Record<string, CanvasHistory>;
+}
 
 const RECONCILIATION_STREAM_PREFIX = "__reconciliation__:";
 export const MAX_CANVAS_HISTORY = 50;
@@ -15,20 +29,17 @@ export const createEmptyCanvasContext = (): CanvasContext => ({
   contextRevealedTasks: [],
 });
 
-export function getActiveCanvasTabId(state: WorkspaceState): string {
-  const activeGroup = state.editorGroups.find((group) => group.id === state.activeGroupId);
-  if (activeGroup?.activeTabId) {
-    const activeTab = activeGroup.openTabs.find((tab) => tab.id === activeGroup.activeTabId);
-    if (activeTab?.type === "canvas") return activeTab.id;
-  }
-  for (const group of state.editorGroups) {
-    const canvasTab = group.openTabs.find((tab) => tab.type === "canvas");
-    if (canvasTab) return canvasTab.id;
-  }
+export function getActiveCanvasTabId(state: CanvasTabLookupState): string {
+  const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+  if (activeTab?.type === "canvas") return activeTab.id;
+  const firstCanvas = state.tabs.find((tab) => tab.type === "canvas");
+  if (firstCanvas) return firstCanvas.id;
+  // `setRootPath` seeds `canvasContexts.canvas`, so this keeps canvas actions
+  // addressable even with no canvas tab open.
   return "canvas";
 }
 
-export function getOrCreateContext(state: WorkspaceState, tabId: string): CanvasContext {
+export function getOrCreateContext(state: CanvasTabLookupState, tabId: string): CanvasContext {
   if (!state.canvasContexts) state.canvasContexts = {};
   if (!state.canvasContexts[tabId]) {
     state.canvasContexts[tabId] = createEmptyCanvasContext();
@@ -36,10 +47,10 @@ export function getOrCreateContext(state: WorkspaceState, tabId: string): Canvas
   return state.canvasContexts[tabId];
 }
 
-export const canvasHasGlobalChatNode = (state: WorkspaceState, tabId: string): boolean =>
+export const canvasHasGlobalChatNode = (state: CanvasTabLookupState, tabId: string): boolean =>
   state.canvasContexts[tabId]?.nodes.some((node) => node.type === "globalChatNode") ?? false;
 
-export function findTabIdByNodeId(state: WorkspaceState, nodeId: string): string {
+export function findTabIdByNodeId(state: CanvasTabLookupState, nodeId: string): string {
   if (nodeId.startsWith(RECONCILIATION_STREAM_PREFIX)) {
     const tabId = nodeId.slice(RECONCILIATION_STREAM_PREFIX.length);
     if (state.canvasContexts?.[tabId]) return tabId;
@@ -50,7 +61,7 @@ export function findTabIdByNodeId(state: WorkspaceState, nodeId: string): string
   return getActiveCanvasTabId(state);
 }
 
-export function findTabIdByEdgeId(state: WorkspaceState, edgeId: string): string {
+export function findTabIdByEdgeId(state: CanvasTabLookupState, edgeId: string): string {
   for (const [tabId, context] of Object.entries(state.canvasContexts || {})) {
     if (context.edges?.some((edge) => edge.id === edgeId)) return tabId;
   }
@@ -58,7 +69,7 @@ export function findTabIdByEdgeId(state: WorkspaceState, edgeId: string): string
 }
 
 function pushHistoryToState(
-  state: WorkspaceState,
+  state: CanvasTabLookupState,
   tabId: string,
   snapshot: CanvasHistorySnapshot,
 ): Record<string, CanvasHistory> {
@@ -69,7 +80,7 @@ function pushHistoryToState(
 }
 
 export function updateContextAndSync(
-  state: WorkspaceState,
+  state: CanvasTabLookupState,
   tabId: string,
   updater: (context: CanvasContext) => Partial<CanvasContext>,
   trackHistory = false,
@@ -103,8 +114,18 @@ export function updateContextAndSync(
   };
 }
 
-export function syncActiveCanvasAliases(state: WorkspaceState): Partial<WorkspaceState> {
-  const context = getOrCreateContext(state, getActiveCanvasTabId(state));
+/**
+ * Republishes the active canvas's data to the top-level alias fields.
+ *
+ * Reads without creating: this used to call `getOrCreateContext`, which
+ * MUTATES `state.canvasContexts` in place, so merely opening a file tab
+ * silently materialized an empty `canvasContexts.canvas` entry. The canvas
+ * actions that genuinely need creation still call `getOrCreateContext`
+ * directly.
+ */
+export function syncActiveCanvasAliases(state: CanvasTabLookupState): Partial<WorkspaceState> {
+  const context =
+    state.canvasContexts[getActiveCanvasTabId(state)] ?? createEmptyCanvasContext();
   return {
     nodes: context.nodes,
     edges: context.edges,
@@ -113,4 +134,17 @@ export function syncActiveCanvasAliases(state: WorkspaceState): Partial<Workspac
     globalChatHistory: context.globalChatHistory,
     edgeReconciliationStatus: context.edgeReconciliationStatus,
   };
+}
+
+/**
+ * Applies a tab-state update and re-syncs the canvas aliases, so activating or
+ * closing a canvas tab swaps the visible graph. Lives here rather than in the
+ * tabs slice because the aliasing is a canvas concern.
+ */
+export function withActiveCanvas(
+  state: WorkspaceState,
+  updates: Partial<WorkspaceState>,
+): Partial<WorkspaceState> {
+  const nextState = { ...state, ...updates } as WorkspaceState;
+  return { ...updates, ...syncActiveCanvasAliases(nextState) };
 }

@@ -4,29 +4,22 @@ import { randomUUID } from "node:crypto";
 import fs from "fs";
 import path from "path";
 import { WebSocket } from "ws";
-import { AgentEnvelope, AGENT_PROTOCOL_VERSION, isRecord } from "../../../shared/agentProtocol";
+import {
+  AgentEnvelope,
+  AGENT_PROTOCOL_VERSION,
+  isRecord,
+  ReadFileRpcResponse,
+  RpcError,
+  RpcErrorCode,
+  WriteFileRpcResponse,
+} from "../../../shared/agent-protocol";
 import { harnessTelemetry } from "./observability";
 
-export type RpcErrorCode =
-  | "RPC_TIMEOUT"
-  | "RPC_DISCONNECTED"
-  | "RPC_WRONG_OWNER"
-  | "RPC_DUPLICATE_RESPONSE"
-  | "RPC_LATE_RESPONSE"
-  | "RPC_INVALID_PAYLOAD"
-  | "RPC_SEND_FAILED";
-
-export class RpcError extends Error {
-  constructor(
-    public readonly code: RpcErrorCode,
-    message: string,
-    public readonly requestId: string,
-    options?: { cause?: unknown },
-  ) {
-    super(message, options);
-    this.name = "RpcError";
-  }
-}
+// RpcErrorCode and RpcError now live in shared/agent-protocol (errors.ts /
+// rpc.ts) so both runtimes can share the shape; re-exported here so this
+// module's existing importers (e.g. websocket.test.ts) are unaffected.
+export type { RpcErrorCode };
+export { RpcError };
 
 export interface RpcRequestOptions<TResponse> {
   type: string;
@@ -421,6 +414,26 @@ export function validateRpcResponse(value: unknown): Record<string, unknown> {
   if (typeof response.requestId !== "string") throw new Error("Expected requestId to be a string.");
   if (response.error !== undefined && typeof response.error !== "string") throw new Error("Expected error to be a string.");
   return response;
+}
+
+/**
+ * Same boundary check as validateRpcResponse, narrowed to the read_file /
+ * write_file response shapes shared/agent-protocol/rpc.ts defines -- used at
+ * the read_file/write_file `request()` call sites instead of the generic
+ * validator so those two RPCs are checked (and typed) against one shared
+ * definition instead of each capability re-deriving its own shape from the
+ * untyped response.
+ */
+export function validateReadFileRpcResponse(value: unknown): ReadFileRpcResponse & { requestId: string } {
+  const response = validateRpcResponse(value);
+  if (response.content !== undefined && typeof response.content !== "string") {
+    throw new Error("Expected content to be a string.");
+  }
+  return response as unknown as ReadFileRpcResponse & { requestId: string };
+}
+
+export function validateWriteFileRpcResponse(value: unknown): WriteFileRpcResponse & { requestId: string } {
+  return validateRpcResponse(value) as unknown as WriteFileRpcResponse & { requestId: string };
 }
 
 /** Test-only reset for the process-global RPC registry. */

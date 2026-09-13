@@ -1,17 +1,15 @@
 import { GitBranch } from "lucide-react";
-import type { CustomProvider } from "../../../store";
-import { providerModelVariants } from "../../../store/providerHelpers";
-import type {
-  ClaudeCodeConnectionStatus,
-  CodexConnectionStatus,
-  CopilotConnectionStatus,
-} from "../../../services/llmIntegrationService";
+import type { CustomProvider, ProviderStatus } from "../../../store";
+import {
+  isClaudeCodeProvider,
+  isCodexProvider,
+  isCopilotProvider,
+  isManagedAuthProvider,
+  providerModelVariants,
+} from "../../../store/providerHelpers";
+import { providerStatusOrUnknown } from "../../../integrations/registryTypes";
 
 type ConnectionStatus = "connected" | "failed";
-type ManagedStatus =
-  | ClaudeCodeConnectionStatus
-  | CodexConnectionStatus
-  | CopilotConnectionStatus;
 
 const PROVIDERS_WITH_ENVIRONMENT_CREDENTIALS = new Set([
   "openai",
@@ -27,9 +25,11 @@ interface ProviderListProps {
   providers: CustomProvider[];
   activeProviderId: string | null;
   connectionStatuses: Record<string, ConnectionStatus>;
-  copilotStatus: CopilotConnectionStatus | null;
-  codexStatus: CodexConnectionStatus | null;
-  claudeCodeStatus: ClaudeCodeConnectionStatus | null;
+  /** The whole registry (REFACTOR_PLAN.md PR 3b commit 10) -- replaces the
+      three separate copilotStatus/codexStatus/claudeCodeStatus props each
+      previously requiring LlmSetupTab to plumb through its own status
+      objects. Every provider's badge is looked up by id from here. */
+  providerStatus: Record<string, ProviderStatus>;
   onSelectProvider: (provider: CustomProvider) => void;
 }
 
@@ -38,40 +38,16 @@ interface ProviderBadge {
   colorClassName: string;
 }
 
-function isCopilotProvider(provider: CustomProvider): boolean {
-  return provider.transport === "github-copilot-sdk" || provider.id === "github-copilot";
-}
-
-function isCodexProvider(provider: CustomProvider): boolean {
-  return provider.transport === "openai-codex-app-server" || provider.id === "openai-codex";
-}
-
-function isClaudeCodeProvider(provider: CustomProvider): boolean {
-  return provider.transport === "anthropic-claude-agent-sdk"
-    || provider.id === "anthropic-claude-code";
-}
-
-function managedStatusForProvider(
-  provider: CustomProvider,
-  statuses: Pick<
-    ProviderListProps,
-    "claudeCodeStatus" | "codexStatus" | "copilotStatus"
-  >,
-): ManagedStatus | null {
-  if (isCodexProvider(provider)) return statuses.codexStatus;
-  if (isClaudeCodeProvider(provider)) return statuses.claudeCodeStatus;
-  if (isCopilotProvider(provider)) return statuses.copilotStatus;
-  return null;
+function managedStatusForProvider(provider: CustomProvider, providerStatus: Record<string, ProviderStatus>): ProviderStatus | null {
+  return isManagedAuthProvider(provider) ? providerStatusOrUnknown(providerStatus, provider.id) : null;
 }
 
 function providerBadge(
   provider: CustomProvider,
   connectionStatus: ConnectionStatus | undefined,
-  managedStatus: ManagedStatus | null,
+  managedStatus: ProviderStatus | null,
 ): ProviderBadge {
-  if (isCopilotProvider(provider) || isCodexProvider(provider) || isClaudeCodeProvider(provider)) {
-    return managedStatus ? managedProviderBadge(managedStatus) : warningBadge("Sign In");
-  }
+  if (managedStatus) return managedProviderBadge(managedStatus);
   if (connectionStatus === "connected") return successBadge("Connected");
   if (connectionStatus === "failed") return failedBadge("Failed");
   if (provider.apiKey) return successBadge("Configured");
@@ -79,10 +55,10 @@ function providerBadge(
   return warningBadge(provider.authType === "none" ? "No Auth" : "Env / Key");
 }
 
-function managedProviderBadge(status: ManagedStatus): ProviderBadge {
-  if (status.authenticated) return successBadge("Connected");
-  if (status.state === "connecting") return warningBadge("Signing In");
-  if (status.state === "failed") return failedBadge("Failed");
+function managedProviderBadge(status: ProviderStatus): ProviderBadge {
+  if (status.kind === "ready") return successBadge("Connected");
+  if (status.kind === "loading") return warningBadge("Signing In");
+  if (status.kind === "error") return failedBadge("Failed");
   return warningBadge("Sign In");
 }
 
@@ -125,33 +101,19 @@ function managedProviderVendor(provider: CustomProvider): string {
   return "GitHub";
 }
 
-function managedAccountLabel(
-  provider: CustomProvider,
-  status: ManagedStatus,
-): string {
-  if (isCopilotProvider(provider) && "login" in status && status.login) {
-    return ` as ${status.login}`;
-  }
-  if ("email" in status && status.email) return ` as ${status.email}`;
-  return "";
-}
-
-function managedStatusMessage(
-  provider: CustomProvider,
-  status: ManagedStatus,
-): string {
+function managedStatusMessage(provider: CustomProvider, status: ProviderStatus): string {
   if (status.message) return status.message;
 
   const vendor = managedProviderVendor(provider);
-  if (status.authenticated) return `Signed in${managedAccountLabel(provider, status)}.`;
-  if (status.state === "connecting") return `Waiting for ${vendor} authorization to complete.`;
+  if (status.kind === "ready") return `Signed in${status.account ? ` as ${status.account}` : ""}.`;
+  if (status.kind === "loading") return `Waiting for ${vendor} authorization to complete.`;
   return `Sign in with ${vendor} to activate this integration.`;
 }
 
-function statusDotClassName(status: ManagedStatus): string {
-  if (status.authenticated) return "bg-[var(--color-status-success)]";
-  if (status.state === "connecting") return "bg-[var(--color-status-warning)] animate-pulse";
-  if (status.state === "failed") return "bg-[var(--color-status-danger)]";
+function statusDotClassName(status: ProviderStatus): string {
+  if (status.kind === "ready") return "bg-[var(--color-status-success)]";
+  if (status.kind === "loading") return "bg-[var(--color-status-warning)] animate-pulse";
+  if (status.kind === "error") return "bg-[var(--color-status-danger)]";
   return "bg-[var(--text-muted)]";
 }
 
@@ -164,13 +126,9 @@ export function ProviderList({
   providers,
   activeProviderId,
   connectionStatuses,
-  copilotStatus,
-  codexStatus,
-  claudeCodeStatus,
+  providerStatus,
   onSelectProvider,
 }: ProviderListProps) {
-  const statuses = { copilotStatus, codexStatus, claudeCodeStatus };
-
   return (
     <div className="bg-[var(--bg-sidebar)] border border-[var(--border-color)] rounded-xl p-4 space-y-3">
       <h3 className="text-xs font-bold text-[var(--text-muted)] uppercase tracking-wider font-mono">
@@ -178,7 +136,7 @@ export function ProviderList({
       </h3>
       <div className="space-y-2">
         {providers.map((provider) => {
-          const managedStatus = managedStatusForProvider(provider, statuses);
+          const managedStatus = managedStatusForProvider(provider, providerStatus);
           const badge = providerBadge(
             provider,
             connectionStatuses[provider.id],

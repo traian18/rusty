@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useWorkspaceStore } from "../../../../store";
+import { selectTabById } from "../../../../store/tabSelectors";
 import { persistenceOrchestrator } from "../../../../services/vfs";
 import { reconciliationService } from "../../../../services/reconciliationService";
 
@@ -165,14 +166,7 @@ async function runAutoSave(tabId: string): Promise<void> {
     return;
   }
 
-  let title: string | null = null;
-  for (const group of state.editorGroups) {
-    const tab = group.openTabs.find((candidate) => candidate.id === tabId);
-    if (tab) {
-      title = tab.title;
-      break;
-    }
-  }
+  const title = selectTabById(state, tabId)?.title ?? null;
   if (!title || !state.canvasContexts[tabId]) {
     // The tab may have closed or the workspace may have changed while the
     // debounce timer was pending. Never create an empty/stale canvas file.

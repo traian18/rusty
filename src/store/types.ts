@@ -8,6 +8,11 @@ import type {
 import type { McpServerConfig } from "../components/mcp/types";
 import type { TypographyPreferences } from "../preferences/typography";
 import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences/shortcuts";
+import type { EditorFileSafetyPreferences } from "../preferences/editorFileSafety";
+import type { DrawerView } from "../preferences/shellLayout";
+import type { OpenTabRequest, TabInstance } from "../tabs/types";
+import type { StartupState } from "../startup/types";
+import type { ProviderId, ProviderStatusEntry } from "../integrations/registryTypes";
 
 export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -44,6 +49,13 @@ export interface CustomProvider {
   authType?: "bearer" | "anthropic" | "none" | "environment";
   catalogUrl?: string;
   models: ProviderModel[];
+  /** ISO timestamp of the last successful discoverModels() call for this
+      provider (REFACTOR_PLAN.md PR 3b). Absent means "never discovered" --
+      what lets createIntegrationSlice's load-time merge stop conflating
+      that with "discovered and legitimately empty" (a saved empty models
+      array used to always fall back to the hardcoded defaults). Optional,
+      so no PROVIDER_CONFIG_VERSION bump was needed to add it. */
+  modelsFetchedAt?: string;
 }
 
 export type ProviderQuotaState = "available" | "unavailable" | "unauthenticated";
@@ -80,6 +92,15 @@ export interface ProviderQuotaSnapshot {
   manageUrl?: string;
 }
 
+/**
+ * The integration registry's per-provider entry (REFACTOR_PLAN.md PR 3b).
+ * Binds the generic ProviderStatusEntry (src/integrations/registryTypes.ts,
+ * which cannot import this file -- see its own layering.test.ts) to this
+ * app's concrete quota snapshot type, the same direction this file already
+ * imports StartupState from ../startup/types.
+ */
+export type ProviderStatus = ProviderStatusEntry<ProviderQuotaSnapshot>;
+
 export interface GeneratedTaskNodeSpec {
   key?: string;
   title: string;
@@ -101,10 +122,16 @@ export interface DevLog {
   timestamp: string;
 }
 
+/**
+ * Unified with the previously-drifted copy in components/git/GitActions.ts
+ * (REFACTOR_PLAN.md PR 5b commit 14) -- that file now re-exports this one
+ * instead of declaring its own. "renamed" and "copied" both come from
+ * git.rs's `-z` status parser (PR 5a commit 7); "copied" is new there.
+ */
 export interface GitFileStatus {
   path: string;
   name: string;
-  status_type: "modified" | "added" | "deleted" | "untracked";
+  status_type: "modified" | "added" | "deleted" | "untracked" | "renamed" | "copied";
 }
 
 export interface GitStatusResult {
@@ -114,15 +141,61 @@ export interface GitStatusResult {
   unstaged: GitFileStatus[];
 }
 
-export interface Tab {
-  id: string;
-  type: "canvas" | "rusty" | "file" | "task" | "settings" | "llm-setup" | "git-diff" | "git-history" | "workspace" | "agent" | "skills" | "mcp-integration" | "onboarding" | "metrics";
-  title: string;
-  key: string;
-  diffType?: "staged" | "unstaged" | "commit";
-  commitHash?: string;
-  line?: number;
+/**
+ * Mirrors git.rs's `GitHeadState` (REFACTOR_PLAN.md PR 5a commit 4), hand-
+ * declared per this file's existing convention (no codegen) -- see
+ * createGitSlice.ts for the snake_case-wire-to-camelCase-JS field mapping.
+ * `mode` is `"branch"`, `"detached"`, or `"unborn"`; `branch` may still be
+ * set when `mode === "unborn"` (a freshly `git init`-ed repo already points
+ * HEAD at a named branch before the first commit exists), so the two are
+ * independent signals, not mutually exclusive.
+ */
+export interface GitHeadState {
+  mode: "branch" | "detached" | "unborn";
+  branch: string | null;
+  oid: string | null;
 }
+
+/** Mirrors git.rs's `SubmoduleState` (PR 5a commit 11). */
+export interface SubmoduleState {
+  changedGitlink: boolean;
+  modifiedWorktree: boolean;
+  untrackedContent: boolean;
+}
+
+/**
+ * A discovered Git repository -- the opened workspace root, or one of its
+ * linked worktrees/submodules (PR 5a commits 4-5). `id` is the canonicalized
+ * `worktreePath`, the same convention `src/tabs/identity.ts`'s
+ * `canonicalizeFilePath` already uses for tab identity -- not a hash.
+ */
+export interface GitRepository {
+  id: string;
+  worktreePath: string;
+  gitDir: string;
+  kind: "workspace" | "worktree" | "submodule";
+  parentId: string | null;
+  submodulePath: string | null;
+  initialized: boolean;
+  head: GitHeadState;
+  /** Only present for an initialized `kind: "submodule"` entry. */
+  submoduleState: SubmoduleState | null;
+}
+
+/**
+ * Mirrors git.rs's `GitError` (PR 5a commit 2), the structured error every
+ * git.rs command now rejects with instead of a bare string. Frontend call
+ * sites should read `.message` for display (see gitErrors.ts's
+ * `gitErrorMessage` helper) rather than stringifying the whole object.
+ */
+export interface GitError {
+  operation: string;
+  repository: string;
+  exitCode: number | null;
+  stderr: string;
+  message: string;
+}
+
 
 export interface AgentMessage {
   id: string;
@@ -188,11 +261,6 @@ export type MetricsTimeframe =
   | { mode: "range"; from: string; to: string }
   | { mode: "all-time" };
 
-export interface EditorGroup {
-  id: string;
-  openTabs: Tab[];
-  activeTabId: string | null;
-}
 
 export interface GlobalChatMessage {
   id?: string;
@@ -262,6 +330,12 @@ export interface LspSettings {
 }
 
 export interface WorkspaceState {
+  /** The startup coordinator's live lifecycle state (REFACTOR_PLAN.md PR
+      3a). No consumers yet as of commit 9 -- AppBootstrapBoundary is wired
+      to it in a later commit. */
+  startupState: StartupState;
+  setStartupState: (startupState: StartupState) => void;
+
   rootPath: string;
   nodes: Node[];
   edges: Edge[];
@@ -274,10 +348,59 @@ export interface WorkspaceState {
   customProviders: CustomProvider[];
   activeCustomProviderId: string | null;
   activeModel: string;
+  /** The integration registry (REFACTOR_PLAN.md PR 3b): one global source
+      of provider auth/model/quota status, keyed by provider id. Absent
+      entries read as {kind: "unknown"} via providerStatusOrUnknown
+      (src/integrations/registryTypes.ts) -- no consumers yet as of the
+      slice's own commit; the coordinator that populates it lands in a
+      later commit. */
+  providerStatus: Record<ProviderId, ProviderStatus>;
+  setProviderStatus: (id: ProviderId, entry: ProviderStatus) => void;
+  patchProviderStatus: (id: ProviderId, patch: Partial<ProviderStatus>) => void;
+  /** @deprecated single-slot shim kept during the PR 5b migration (removed
+      once every consumer moves to statusByRepositoryId -- commit 21); still
+      the only source every existing consumer reads as of commit 15. */
   gitStatus: GitStatusResult | null;
+  /** All repositories discovered under the current rootPath: the workspace
+      root itself, its linked worktrees, and its submodules (recursively,
+      for initialized ones) -- REFACTOR_PLAN.md PR 5b commit 15. Empty until
+      discoverRepositories() has been called at least once for this
+      rootPath. */
+  repositories: GitRepository[];
+  /** Keyed by GitRepository.id. Populated lazily, per repository, by
+      loadRepositoryGitStatus -- unlike the deprecated single-slot
+      `gitStatus`, nothing eagerly loads every repository's status just
+      because discoverRepositories() ran. */
+  statusByRepositoryId: Record<string, GitStatusResult>;
+  /** The repository the Source Control UI (and anything scoped to "the
+      current repo") should act on. Not yet wired to any consumer as of
+      commit 15 -- SourceControl.tsx's own local activeRepo state moves
+      here in commit 16. */
+  activeRepositoryId: string | null;
+  setActiveRepositoryId: (id: string | null) => void;
+  /** Replaces the naive depth-3 filesystem walk (`scanSubprojects`, backed
+      by the now-deleted git_scan_subprojects/scan_git_subdirs) with real
+      Git-native discovery (git worktree list --porcelain + recursive
+      submodule status). Wired up as SourceControl.tsx's RepoSelector
+      source in commit 16. */
+  discoverRepositories: () => Promise<void>;
+  /** Loads git status for one discovered repository into
+      statusByRepositoryId, keyed by its id -- the per-repository
+      counterpart to the deprecated single-slot loadGitStatus. */
+  loadRepositoryGitStatus: (repositoryId: string) => Promise<void>;
+  /** Submodule actions (REFACTOR_PLAN.md PR 5b commit 23), backed by PR 5a
+      #13's git_submodule_init/update/sync. All three take a discovered
+      `kind: "submodule"` repository's id, re-run discoverRepositories() on
+      success to refresh `initialized`/`submoduleState`, and are no-ops for
+      any other kind. Gitlink staging needs no action here -- a changed
+      gitlink already shows up as a modified path in the *parent*
+      repository's own status, so the existing stageFile action (against
+      the parent's id) already covers it, per PR 5a #13's own design note. */
+  initSubmodule: (repositoryId: string) => Promise<void>;
+  updateSubmodule: (repositoryId: string, recursive: boolean) => Promise<void>;
+  syncSubmodule: (repositoryId: string) => Promise<void>;
   lastRename: { originalPath: string; newPath: string } | null;
   setLastRename: (rename: { originalPath: string; newPath: string } | null) => void;
-  collapseAllTrigger?: number;
   expandedPaths: Record<string, boolean>;
   revealPath: string | null;
   selectedEdgeId: string | null;
@@ -290,8 +413,6 @@ export interface WorkspaceState {
   onConnectForTab: (tabId: string, connection: Connection) => void;
   updateCanvasContext: (tabId: string, updates: Partial<CanvasContext>) => void;
   loadCanvasTab: (data: any) => string;
-  createCanvasTab: (title?: string) => void;
-  createAgentTab: (title?: string) => void;
   undoCanvasTab: (tabId: string) => void;
   redoCanvasTab: (tabId: string) => void;
 
@@ -306,6 +427,10 @@ export interface WorkspaceState {
   clearAgentStream: (tabId: string) => void;
   addAgentPermissionRequest: (tabId: string, request: AgentPermissionRequest) => void;
   resolveAgentPermission: (tabId: string, requestId: string, approved: boolean) => void;
+  /** Which Agent tabs currently have an active run (REFACTOR_PLAN.md PR 7
+      commit 2) -- see TabDomainState's copy of this field for why. */
+  busyAgentTabIds: Record<string, boolean>;
+  setAgentTabBusy: (tabId: string, busy: boolean) => void;
 
   skills: Skill[];
   activeSkillId: string | null;
@@ -319,6 +444,10 @@ export interface WorkspaceState {
   metricsTimeframe: MetricsTimeframe;
   metricsLoading: boolean;
   metricsTodayTotal: number;
+  /** Subscribes to live usage_update events exactly once (idempotent).
+      Called from AppBootstrapBoundary, not at slice-creation time -- see
+      ARCHITECTURE.md's "slice import-time purity". */
+  initMetricsSubscription: () => void;
   loadMetricsSummary: () => Promise<void>;
   setMetricsTimeframe: (timeframe: MetricsTimeframe) => void;
   applyUsageUpdate: (runKey: string, cumulativeTotal: number) => void;
@@ -329,16 +458,37 @@ export interface WorkspaceState {
   updateMcpServer: (name: string, updates: Partial<McpServerConfig>) => void;
   removeMcpServer: (name: string) => void;
 
+  /**
+   * Initializes to a constant and is hydrated from localStorage only via
+   * hydrateTheme(), called from main.tsx before createRoot -- never at
+   * slice-creation time. See ARCHITECTURE.md's "slice import-time purity".
+   */
   activeThemeId: string;
   setActiveThemeId: (themeId: string) => void;
+  hydrateTheme: () => void;
+  /** Same hydration contract as hydrateTheme() above. */
   typographyPreferences: TypographyPreferences;
   setTypographyPreference: (key: keyof TypographyPreferences, value: number) => void;
   resetTypographyPreferences: () => void;
+  hydrateTypography: () => void;
+  /** Same hydration contract as hydrateTheme() above. */
   keyboardShortcuts: KeyboardShortcutPreferences;
   setKeyboardShortcut: (action: ShortcutAction, shortcut: string) => void;
   resetKeyboardShortcuts: () => void;
+  hydrateShortcuts: () => void;
+  /** Same hydration contract as hydrateTheme() above (REFACTOR_PLAN.md PR 6). */
+  editorFileSafety: EditorFileSafetyPreferences;
+  setLargeFileThresholdBytes: (bytes: number) => void;
+  resetEditorFileSafety: () => void;
+  hydrateEditorFileSafety: () => void;
 
   setRootPath: (path: string) => void;
+  /** Git status + skills + metrics for the current rootPath, settled
+      together via Promise.allSettled so one throwing doesn't stop the
+      others -- the shared tail setRootPath already ran; the startup
+      workspace-restore step (REFACTOR_PLAN.md PR 3a) calls it too, which is
+      what makes a restored workspace load metrics, not just fileTree. */
+  loadWorkspaceData: () => Promise<void>;
   setGitStatus: (status: GitStatusResult | null) => void;
   loadGitStatus: (rootDir?: string) => Promise<void>;
   setFileTree: (tree: any[]) => void;
@@ -384,6 +534,26 @@ export interface WorkspaceState {
   clearDevLogs: () => void;
   setShowDevConsole: (show: boolean) => void;
 
+  /**
+   * Application-shell layout. `drawerOpen`/`drawerView`/`searchOpen` are
+   * session-only by design; only `drawerWidth` persists (see
+   * preferences/shellLayout.ts). `drawerWidth` initializes to a constant and
+   * is hydrated from localStorage only via `hydrateUi()`, called from
+   * AppBootstrapBoundary -- never at slice-creation time.
+   */
+  drawerOpen: boolean;
+  drawerView: DrawerView;
+  drawerWidth: number;
+  searchOpen: boolean;
+  hydrateUi: () => void;
+  /** Opens on `view`, or switches to it; closes if already open on `view`. */
+  toggleDrawerView: (view: DrawerView) => void;
+  /** Opens on `view`. Unlike `toggleDrawerView`, never closes an open drawer. */
+  openDrawer: (view: DrawerView) => void;
+  closeDrawer: () => void;
+  setDrawerWidth: (width: number) => void;
+  setSearchOpen: (open: boolean) => void;
+
   terminalTabs: { id: string; name: string; type: "dev-logs" | "local"; cwd?: string }[];
   activeTerminalTabId: string | null;
   initTerminalState: (isDev: boolean) => void;
@@ -391,16 +561,13 @@ export interface WorkspaceState {
   closeTerminalTab: (id: string) => void;
   setActiveTerminalTabId: (id: string) => void;
 
-  editorGroups: EditorGroup[];
-  activeGroupId: string;
-  groupSizes: number[];
-  openTab: (tab: Tab, groupId?: string) => void;
-  closeTab: (id: string, groupId?: string) => void;
-  setActiveTabId: (id: string | null, groupId?: string) => void;
-  splitTab: (id: string, fromGroupId: string) => void;
-  moveTab: (id: string, fromGroupId: string, toGroupId: string) => void;
-  setGroupSizes: (sizes: number[]) => void;
-  setActiveGroupId: (id: string) => void;
+  tabs: TabInstance[];
+  activeTabId: string | null;
+  /** Opens or focuses the tab for this request; returns its id. */
+  openTab: (request: OpenTabRequest) => string;
+  activateTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  updateTab: (id: string, updates: Partial<Omit<TabInstance, "id" | "type">>) => void;
 
   setPathExpanded: (path: string, expanded: boolean) => void;
   togglePathExpanded: (path: string) => void;
@@ -412,9 +579,68 @@ export interface WorkspaceState {
   setSelectedEdgeId: (id: string | null) => void;
   setEdgeStatus: (edgeId: string, status: "idle" | "unreconciled" | "reconciled") => void;
   getSequenceEdges: () => Edge[];
-  updateTabTitle: (tabId: string, title: string) => void;
   lspSettings: LspSettings;
   updateLspSettings: (settings: Partial<LspSettings>) => void;
+  /** True only once the initial config load AND (if a workspace was saved)
+      its restore have both settled -- saveSecureConfig is a no-op until
+      then, so a failed/incomplete load can never overwrite a real,
+      previously-saved config with default state (REFACTOR_PLAN.md PR 3a).
+      Set by loadSecureConfig directly when nothing was ever saved; set by
+      the startup "workspace-restore" step (components/shell/startupSteps.ts)
+      otherwise, once it has resolved pendingWorkspaceRestorePath one way or
+      another. */
+  secureConfigLoaded: boolean;
+  /** The workspace path loadSecureConfig found saved, for the
+      "workspace-restore" step to actually restore -- null once there is
+      nothing left to restore (including "there never was anything"). Not
+      restored inline by loadSecureConfig itself: that step needs its own,
+      longer timeout budget, independent of secure-config's critical one. */
+  pendingWorkspaceRestorePath: string | null;
   saveSecureConfig: () => Promise<void>;
   loadSecureConfig: () => Promise<void>;
+
+  // Tab-specific UI state that persists across mount/unmount cycles
+  skillsTabUi: {
+    selectedSkillId: string | null;
+    editingSkill: Partial<Skill> | null;
+    isGenerating: boolean;
+    generateError: string | null;
+    genModel: string;
+    genDescription: string;
+    showSavedModal: boolean;
+  };
+  setSkillsTabUi: (updates: Partial<this["skillsTabUi"]>) => void;
+  setSkillsTabSelectedSkillId: (id: string | null) => void;
+  setSkillsTabEditingSkill: (skill: Partial<Skill> | null) => void;
+  setSkillsTabIsGenerating: (isGenerating: boolean) => void;
+  setSkillsTabGenerateError: (error: string | null) => void;
+  setSkillsTabGenModel: (model: string) => void;
+  setSkillsTabGenDescription: (description: string) => void;
+  setSkillsTabShowSavedModal: (show: boolean) => void;
+
+  llmSetupTabUi: {
+    apiKey: string;
+    baseUrl: string;
+    catalogUrl: string;
+    apiType: string;
+    authType: "bearer" | "anthropic" | "none" | "environment";
+    showKey: boolean;
+    fetchingModels: boolean;
+    testingConnection: boolean;
+    connectionStatus: Record<string, "connected" | "failed">;
+    signingOut: boolean;
+  };
+  setLlmSetupTabUi: (updates: Partial<this["llmSetupTabUi"]>) => void;
+  setLlmSetupTabApiKey: (key: string) => void;
+  setLlmSetupTabBaseUrl: (url: string) => void;
+  setLlmSetupTabCatalogUrl: (url: string) => void;
+  setLlmSetupTabApiType: (type: string) => void;
+  setLlmSetupTabAuthType: (type: "bearer" | "anthropic" | "none" | "environment") => void;
+  setLlmSetupTabShowKey: (show: boolean) => void;
+  setLlmSetupTabFetchingModels: (fetching: boolean) => void;
+  setLlmSetupTabTestingConnection: (testing: boolean) => void;
+  setLlmSetupTabConnectionStatus: (
+    status: Record<string, "connected" | "failed">
+  ) => void;
+  setLlmSetupTabSigningOut: (signingOut: boolean) => void;
 }

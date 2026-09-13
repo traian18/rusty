@@ -5,7 +5,7 @@ import {
   isRecord,
   parseAgentMessage,
   unwrapEnvelope,
-} from "../../shared/agentProtocol";
+} from "../../shared/agent-protocol";
 import { SIDECAR_WS_URL } from "../config/sidecar";
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -27,6 +27,29 @@ export interface RunHandle {
   subscribe: (listener: RunEventListener) => Unsubscribe;
 }
 
+/**
+ * The raw socket surface AgentHarnessClient actually uses -- deliberately
+ * narrower than a full connect/send/subscribe/disconnect protocol-level
+ * transport (see REFACTOR_PLAN.md PR 4c's notes on this). The client keeps
+ * every line of its own handshake, sequencing, and reconnection logic;
+ * this interface only lets that logic be driven by something other than a
+ * real `WebSocket` (e.g. an in-memory fake in tests). A real `WebSocket`
+ * already structurally satisfies this, so the default construction path
+ * needs no adapter.
+ */
+export interface AgentTransport {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- `any` (not
+  // `unknown`) is required here so a real WebSocket's own more specific
+  // handler types (e.g. `(ev: Event) => any`) remain structurally assignable.
+  onopen: ((event: any) => void) | null;
+  onmessage: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onclose: ((event: any) => void) | null;
+}
+
 export class AgentHarnessClientError extends Error {
   constructor(public readonly code: string, message: string, options?: { cause?: unknown }) {
     super(message);
@@ -37,13 +60,13 @@ export class AgentHarnessClientError extends Error {
 
 export interface AgentHarnessClientOptions {
   endpoint?: string;
-  createWebSocket?: (url: string) => WebSocket;
+  createWebSocket?: (url: string) => AgentTransport;
   handshakeTimeoutMs?: number;
   maxReconnectAttempts?: number;
 }
 
 export class AgentHarnessClient {
-  private socket?: WebSocket;
+  private socket?: AgentTransport;
   private state: ConnectionState = "disconnected";
   private connectPromise?: Promise<void>;
   private reconnectAttempt = 0;
@@ -57,13 +80,15 @@ export class AgentHarnessClient {
   private connectionId = "";
 
   private readonly endpoint: string;
-  private readonly createWebSocket: (url: string) => WebSocket;
+  private readonly createWebSocket: (url: string) => AgentTransport;
   private readonly handshakeTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
 
   constructor(options: AgentHarnessClientOptions = {}) {
     this.endpoint = options.endpoint || SIDECAR_WS_URL;
     this.createWebSocket = options.createWebSocket || ((url) => new WebSocket(url));
+    // A real WebSocket already structurally satisfies AgentTransport (send,
+    // close, readyState, on{open,message,error,close}) -- no adapter needed.
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5_000;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 6;
   }
@@ -178,12 +203,15 @@ export class AgentHarnessClient {
 
   async cancelRun(runId: string, routing: Record<string, unknown> = {}): Promise<void> {
     await this.connect();
+    // Every capability's stop message today follows `${type}_stop`
+    // (agent_chat -> agent_chat_stop, inline_chat -> inline_chat_stop,
+    // generate_task_nodes -> generate_task_nodes_stop, and now
+    // execute_node -> execute_node_stop) -- this used to be a hardcoded
+    // 3-way switch that silently fell back to "agent_chat_stop" for any
+    // other capability, which did not generalize. As PR 4b adds a real stop
+    // message for each remaining capability, this needs no further changes.
     const requestType = String(routing.type || "agent_chat");
-    const cancelType = requestType === "inline_chat"
-      ? "inline_chat_stop"
-      : requestType === "generate_task_nodes"
-        ? "generate_task_nodes_stop"
-        : "agent_chat_stop";
+    const cancelType = `${requestType}_stop`;
     this.sendEnvelope({ ...routing, type: cancelType, runId });
   }
 
@@ -278,19 +306,15 @@ export class AgentHarnessClient {
       this.emitDiagnostic("client.invalid_message", { detail: parsed.kind === "invalid" ? parsed.error.error.message : "Unexpected hello." });
       return;
     }
-    const flat = parsed.kind === "modern" ? unwrapEnvelope(parsed.value) : parsed.value;
+    const flat = unwrapEnvelope(parsed.value);
     if (typeof flat.type !== "string") return;
-    const runId = parsed.kind === "modern"
-      ? parsed.value.runId
-      : String(flat.runId || flat.tabId || flat.nodeId || flat.sessionId || "legacy");
-    if (parsed.kind === "modern") {
-      const previous = this.incomingSequences.get(runId) || 0;
-      if (parsed.value.sequence <= previous) return;
-      if (previous > 0 && parsed.value.sequence > previous + 1) {
-        this.emitDiagnostic("client.sequence_gap", { runId, expected: previous + 1, received: parsed.value.sequence });
-      }
-      this.incomingSequences.set(runId, parsed.value.sequence);
+    const runId = parsed.value.runId;
+    const previous = this.incomingSequences.get(runId) || 0;
+    if (parsed.value.sequence <= previous) return;
+    if (previous > 0 && parsed.value.sequence > previous + 1) {
+      this.emitDiagnostic("client.sequence_gap", { runId, expected: previous + 1, received: parsed.value.sequence });
     }
+    this.incomingSequences.set(runId, parsed.value.sequence);
     const event = { ...flat, type: flat.type, runId } as RunEvent;
     for (const listener of this.listeners.get(runId) || []) listener(event);
     for (const listener of this.allListeners) listener(event);
@@ -317,100 +341,3 @@ export class AgentHarnessClient {
 }
 
 export const agentHarnessClient = new AgentHarnessClient();
-
-/**
- * Transitional WebSocket-shaped facade. It lets legacy UI handlers share the
- * single negotiated connection while each surface is converted to typed events.
- */
-export function createAgentHarnessSocket(): WebSocket {
-  let readyState: number = WebSocket.CONNECTING;
-  let closed = false;
-  const runIds = new Set<string>();
-  const requestRuns = new Map<string, string>();
-  const activeRuns = new Map<string, string>();
-  let onopen: ((this: WebSocket, ev: Event) => unknown) | null = null;
-  let onmessage: ((this: WebSocket, ev: MessageEvent) => unknown) | null = null;
-  let onerror: ((this: WebSocket, ev: Event) => unknown) | null = null;
-  let onclose: ((this: WebSocket, ev: CloseEvent) => unknown) | null = null;
-
-  const facade = {
-    get readyState() { return readyState; },
-    get bufferedAmount() { return 0; },
-    get url() { return SIDECAR_WS_URL; },
-    get protocol() { return `rusty-agent-v${AGENT_PROTOCOL_VERSION}`; },
-    get extensions() { return ""; },
-    get binaryType() { return "blob" as BinaryType; },
-    set binaryType(_value: BinaryType) {},
-    onopen,
-    onmessage,
-    onerror,
-    onclose,
-    send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-      if (closed || readyState !== WebSocket.OPEN) throw new DOMException("Socket is not open.", "InvalidStateError");
-      if (typeof data !== "string") throw new TypeError("Agent harness messages must be JSON strings.");
-      const parsed = JSON.parse(data) as StartRunInput;
-      const correlatedRun = typeof parsed.requestId === "string" ? requestRuns.get(parsed.requestId) : undefined;
-      const routingId = String(parsed.tabId || parsed.nodeId || parsed.sessionId || parsed.requestId || "");
-      const startTypes = new Set(["agent_chat", "inline_chat", "execute_node", "global_explore", "reconciliate_edge", "reconciliate_graph", "generate_task_nodes", "generate_skill", "test_build"]);
-      const isStop = String(parsed.type).endsWith("_stop") || parsed.type === "command_session_close";
-      const generatedRun = startTypes.has(parsed.type) ? crypto.randomUUID() : undefined;
-      const runId = String(parsed.runId || correlatedRun || (isStop ? activeRuns.get(routingId) : undefined) || generatedRun || routingId || crypto.randomUUID());
-      if (startTypes.has(parsed.type) && routingId) activeRuns.set(routingId, runId);
-      runIds.add(runId);
-      if (routingId) runIds.add(routingId);
-      // The reconciliation sidecar uses a prefixed stream ID for all its
-      // reverse-RPC callbacks (read_file, write_file, log). Register it so
-      // the subscription filter does not silently drop those messages.
-      if (parsed.type === "reconciliate_graph" && routingId) {
-        runIds.add(`__reconciliation__:${routingId}`);
-      }
-      // The test build sidecar uses a prefixed stream ID for all its messages.
-      if (parsed.type === "test_build" && routingId) {
-        runIds.add(`__test_build__:${routingId}`);
-      }
-      void agentHarnessClient.send({ ...parsed, runId }).catch((error) => {
-        onerror?.call(facade as unknown as WebSocket, new ErrorEvent("error", { error }));
-      });
-    },
-    close(code = 1000, reason = "Virtual client closed.") {
-      if (closed) return;
-      closed = true;
-      readyState = WebSocket.CLOSED;
-      unsubscribe();
-      onclose?.call(facade as unknown as WebSocket, new CloseEvent("close", { code, reason, wasClean: code === 1000 }));
-    },
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent() { return true; },
-  };
-
-  const unsubscribe = agentHarnessClient.subscribeAll((event) => {
-    if (closed || !runIds.has(event.runId)) return;
-    if (typeof event.requestId === "string") requestRuns.set(event.requestId, event.runId);
-    if (event.type.endsWith("_complete") || event.type.endsWith("_error") || event.type.endsWith("_stopped")) {
-      for (const [routingId, activeRunId] of activeRuns) {
-        if (activeRunId === event.runId) activeRuns.delete(routingId);
-      }
-    }
-    onmessage?.call(facade as unknown as WebSocket, new MessageEvent("message", { data: JSON.stringify(event) }));
-  });
-  void agentHarnessClient.connect().then(() => {
-    if (closed) return;
-    readyState = WebSocket.OPEN;
-    if (agentHarnessClient.getConnectionId()) runIds.add(agentHarnessClient.getConnectionId());
-    onopen?.call(facade as unknown as WebSocket, new Event("open"));
-  }).catch((error) => {
-    if (closed) return;
-    readyState = WebSocket.CLOSED;
-    onerror?.call(facade as unknown as WebSocket, new ErrorEvent("error", { error }));
-    onclose?.call(facade as unknown as WebSocket, new CloseEvent("close", { code: 1006, reason: String(error) }));
-  });
-
-  Object.defineProperties(facade, {
-    onopen: { get: () => onopen, set: (value) => { onopen = value; } },
-    onmessage: { get: () => onmessage, set: (value) => { onmessage = value; } },
-    onerror: { get: () => onerror, set: (value) => { onerror = value; } },
-    onclose: { get: () => onclose, set: (value) => { onclose = value; } },
-  });
-  return facade as unknown as WebSocket;
-}

@@ -3,7 +3,7 @@ import {
   getLspKeyFromPath,
   getLspKeyFromMonacoId,
   LSP_SETTINGS_KEYS,
-} from "./lspLanguage";
+} from "./languageRegistry";
 import { SIDECAR_WS_URL } from "../config/sidecar";
 
 /**

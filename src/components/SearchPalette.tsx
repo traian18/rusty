@@ -72,13 +72,7 @@ export const SearchPalette: React.FC<SearchPaletteProps> = ({ onClose }) => {
 
   // Select item action
   const handleSelectResult = (match: SearchMatch) => {
-    openTab({
-      id: `file_${match.path.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      type: "file",
-      title: match.name,
-      key: match.path,
-      line: match.line > 0 ? match.line : undefined,
-    });
+    openTab({ type: "file", path: match.path, title: match.name, line: match.line > 0 ? match.line : undefined });
     onClose();
   };
 

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useWorkspaceStore } from "../../store";
+import { fileTabIdentity } from "../../tabs/identity";
 import { notify } from "../../notificationStore";
 import { FileTreeActions, FileActionParams } from "./FileTreeActions";
 
@@ -104,7 +105,7 @@ export const fileTreePresenter: FileTreeActions = {
       await refreshTree();
       
       const state = useWorkspaceStore.getState();
-      const tabId = `file_${item.path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const tabId = fileTabIdentity(item.path);
       state.closeTab(tabId);
       notify("Item Deleted", `Permanently deleted: ${item.name}`, "success");
     } catch (err: any) {
@@ -123,7 +124,7 @@ export const fileTreePresenter: FileTreeActions = {
       await refreshTree();
 
       const state = useWorkspaceStore.getState();
-      const tabId = `file_${srcPath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const tabId = fileTabIdentity(srcPath);
       state.closeTab(tabId);
       
       // Track for undo capability
@@ -145,7 +146,7 @@ export const fileTreePresenter: FileTreeActions = {
       await refreshTree();
 
       const state = useWorkspaceStore.getState();
-      const tabId = `file_${originalPath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const tabId = fileTabIdentity(originalPath);
       state.closeTab(tabId);
 
       state.setLastRename({ originalPath, newPath });

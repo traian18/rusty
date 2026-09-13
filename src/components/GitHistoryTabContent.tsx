@@ -4,6 +4,9 @@ import { useWorkspaceStore } from "../store";
 import { RotateCcw, ArrowUp, ArrowDown, Copy, Check, GitCommit, GitBranch, Tag, User, Calendar, ExternalLink } from "lucide-react";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
+import { gitErrorMessage } from "./git/gitErrors";
+import { formatHeadLabel } from "./git/gitHeadLabel";
+import type { TabOfType } from "../tabs/types";
 
 interface GitCommitInfo {
   hash: string;
@@ -26,10 +29,28 @@ interface parsedDecoration {
  * Renders a visual log/graph of recent commits in the active Git repository.
  * Highlights unpushed (outgoing) commits and parses branch/tag decorations as badges.
  */
-export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
+export const GitHistoryTabContent: React.FC<{ tab: TabOfType<"git-history"> }> = ({ tab }) => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
+  // Falls back to the workspace root for the repo-wide graph opened before
+  // subproject selection existed.
+  const repoPath = tab?.repoPath ?? rootPath;
   const loadGitStatus = useWorkspaceStore((state) => state.loadGitStatus);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  // Real HEAD state for this tab's own repository (REFACTOR_PLAN.md PR 5b
+  // commit 18), replacing the `gitStatus?.currentBranch || "detached"`
+  // guess -- gitStatus is the deprecated single-slot shim, always scoped to
+  // the workspace root, so it was silently wrong for any subproject tab.
+  // Falls back to that same guess only if repositories hasn't been
+  // discovered yet (e.g. this tab opened before SourceControl ever
+  // mounted) -- full cross-refresh guarantees land in commit 24.
+  const repository = repositories.find((repo) => repo.worktreePath === repoPath) ?? null;
+  const currentBranchName = repository
+    ? repository.head.mode === "branch"
+      ? repository.head.branch
+      : null
+    : gitStatus?.currentBranch ?? null;
+  const headBadgeLabel = repository ? formatHeadLabel(repository.head) : gitStatus?.currentBranch || "detached";
 
   const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -56,7 +77,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       setLoadingFiles(true);
       try {
         const files: any[] = await invoke("git_get_commit_files", {
-          rootDir: rootPath,
+          rootDir: repoPath,
           commitHash,
         });
         setCommitFiles(files);
@@ -68,12 +89,11 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
     }
   };
 
-  const handleOpenFileDiff = (filePath: string, fileName: string, commitHash: string, shortHash: string) => {
+  const handleOpenFileDiff = (filePath: string, _fileName: string, commitHash: string, _shortHash: string) => {
     openTab({
-      id: `git-diff-${commitHash}-${filePath}`,
       type: "git-diff",
-      title: `${fileName} (${shortHash})`,
-      key: filePath,
+      repoPath,
+      path: filePath,
       diffType: "commit",
       commitHash,
     });
@@ -89,7 +109,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       if (!confirmRevert) return;
 
       console.log(`Git Graph: Reverting commit ${commitHash}`);
-      await invoke("git_revert_commit", { rootDir: rootPath, commitHash });
+      await invoke("git_revert_commit", { rootDir: repoPath, commitHash });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -97,7 +117,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Revert complete", "Commit reverted successfully.", "success");
     } catch (err: any) {
       console.error("Revert failed:", err);
-      notify("Revert failed", `Revert failed: ${err}`, "error");
+      notify("Revert failed", `Revert failed: ${gitErrorMessage(err)}`, "error");
     }
   };
 
@@ -111,7 +131,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       if (!confirmReset) return;
 
       console.log(`Git Graph: Resetting branch to ${commitHash}`);
-      await invoke("git_reset_to_commit", { rootDir: rootPath, commitHash });
+      await invoke("git_reset_to_commit", { rootDir: repoPath, commitHash });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -119,29 +139,29 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Reset complete", "Branch reset successfully.", "success");
     } catch (err: any) {
       console.error("Reset failed:", err);
-      notify("Reset failed", `Reset failed: ${err}`, "error");
+      notify("Reset failed", `Reset failed: ${gitErrorMessage(err)}`, "error");
     }
   };
 
   // Fetch the commit log from the backend
   const fetchCommitHistory = async () => {
-    if (!rootPath) return;
+    if (!repoPath) return;
     setLoading(true);
     setError(null);
     try {
-      const isFileHistory = tab && tab.key && tab.key !== "git-history";
+      const isFileHistory = Boolean(tab?.path);
       const history: GitCommitInfo[] = isFileHistory
         ? await invoke("git_get_file_commit_history", {
-            rootDir: rootPath,
-            filePath: tab.key,
+            rootDir: repoPath,
+            filePath: tab.path,
           })
         : await invoke("git_get_commit_history", {
-            rootDir: rootPath,
+            rootDir: repoPath,
           });
       setCommits(history);
     } catch (err: any) {
       console.error("Failed to load commit history:", err);
-      setError(String(err));
+      setError(gitErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -150,26 +170,26 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
   // Run on mount or when root path/tab changes
   useEffect(() => {
     fetchCommitHistory();
-  }, [rootPath, tab?.key]);
+  }, [repoPath, tab?.path]);
 
   // Handle manual refresh
   const handleRefresh = async () => {
     await fetchCommitHistory();
-    await loadGitStatus();
+    await loadGitStatus(repoPath);
   };
 
   // Push changes to remote tracking branch
   const handlePush = async () => {
-    if (!rootPath || !gitStatus?.currentBranch || isPushing) return;
+    if (!repoPath || !currentBranchName || isPushing) return;
     setIsPushing(true);
     try {
-      console.log(`Git Graph: Pushing branch "${gitStatus.currentBranch}"...`);
-      await invoke("git_push", { rootDir: rootPath, branchName: gitStatus.currentBranch });
+      console.log(`Git Graph: Pushing branch "${currentBranchName}"...`);
+      await invoke("git_push", { rootDir: repoPath, branchName: currentBranchName });
       await handleRefresh();
       notify("Push complete", "Successfully pushed commits to remote upstream.", "success");
     } catch (err: any) {
       console.error("Push failed:", err);
-      notify("Push failed", `Push failed: ${err}`, "error");
+      notify("Push failed", `Push failed: ${gitErrorMessage(err)}`, "error");
     } finally {
       setIsPushing(false);
     }
@@ -177,11 +197,11 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   // Pull changes from remote upstream
   const handlePull = async () => {
-    if (!rootPath || isPulling) return;
+    if (!repoPath || isPulling) return;
     setIsPulling(true);
     try {
       console.log("Git Graph: Pulling remote modifications...");
-      await invoke("git_pull", { rootDir: rootPath });
+      await invoke("git_pull", { rootDir: repoPath });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -189,7 +209,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Pull complete", "Successfully pulled changes from remote.", "success");
     } catch (err: any) {
       console.error("Pull failed:", err);
-      notify("Pull failed", `Pull failed: ${err}`, "error");
+      notify("Pull failed", `Pull failed: ${gitErrorMessage(err)}`, "error");
     } finally {
       setIsPulling(false);
     }
@@ -232,8 +252,8 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   const unpushedCommitsCount = commits.filter((c) => c.is_unpushed).length;
 
-  const isFileHistory = tab && tab.key && tab.key !== "git-history";
-  const fileBasename = isFileHistory ? tab.key.split(/[/\\]/).pop() || tab.key : "";
+  const isFileHistory = Boolean(tab.path);
+  const fileBasename = tab.path ? tab.path.split(/[/\\]/).pop() || tab.path : "";
 
   return (
     <div className="w-full h-full flex flex-col bg-[var(--bg-app)] font-sans text-xs select-none text-[var(--text-normal)]">
@@ -245,11 +265,11 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
               {isFileHistory ? `History: ${fileBasename}` : "Git Commit History"}
             </h2>
             <span className="bg-[var(--accent-bg)] text-[var(--accent-color)] text-[10px] px-2 py-0.5 rounded font-mono font-bold border border-[var(--accent-color)]/25">
-              {gitStatus?.currentBranch || "detached"}
+              {headBadgeLabel}
             </span>
           </div>
           <p className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-lg">
-            {isFileHistory ? `Showing commits affecting ${tab.key}` : "Showing last 100 commits from all branches"}
+            {isFileHistory ? `Showing commits affecting ${tab.path}` : "Showing last 100 commits from all branches"}
           </p>
         </div>
 
@@ -527,7 +547,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
                                 deleted: "D",
                                 modified: "M",
                               };
-                              const relativePath = file.path.replace(rootPath, "").replace(/^\//, "");
+                              const relativePath = file.path.replace(repoPath, "").replace(/^\//, "");
 
                               return (
                                 <div

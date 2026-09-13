@@ -2,8 +2,12 @@
 
 `McpIntegrationModal` is a self-contained form for adding/editing a single MCP
 (Model Context Protocol) server entry. It is rendered inside `McpIntegrationTab`,
-which manages the full collection and persists it to `localStorage` under
-`rusty_mcp_config`.
+which manages the full collection via the Zustand store's `mcpServers` state,
+persisted as part of the app's encrypted secure config (`localStorage["rusty_secure_config"]`,
+via `saveSecureConfig`/`loadSecureConfig` in `createIntegrationSlice.ts`). An
+older, unrelated `localStorage["rusty_mcp_config"]` key was read at slice
+creation but never written anywhere in the codebase; it was a dead read,
+deleted in REFACTOR_PLAN.md PR 3a.
 
 ## Files
 

@@ -1175,6 +1175,156 @@ fn scan_git_subdirs(dir: &Path, results: &mut Vec<String>, depth: usize) {
     }
 }
 
+/// The branch/detached/unborn tri-state of a repository's `HEAD`, replacing
+/// the old `current_branch: String` field's collapsed representation
+/// (detached returned the literal string `"HEAD"`; unborn fell back to a
+/// dead `"empty-repo"` sentinel -- see `git_status_on_unborn_repo_reports_main_not_empty_repo`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GitHeadState {
+    /// `"branch"`, `"detached"`, or `"unborn"` (a repository with no commits
+    /// yet -- `branch` may still be `Some` here: `git init` points HEAD at
+    /// a named branch before the first commit exists).
+    pub mode: String,
+    pub branch: Option<String>,
+    pub oid: Option<String>,
+}
+
+/// A discovered Git repository: the workspace root the user opened, or one
+/// of its submodules/nested repos/linked worktrees. This commit only
+/// distinguishes `"workspace"` (the common case) from `"worktree"` (a
+/// linked worktree, identified by its resolved git dir containing a
+/// `/worktrees/` path segment) and `"submodule"` (a `/modules/` segment,
+/// present once a submodule is actually initialized) -- `"nested"` (an
+/// unrelated repo that merely happens to live inside another one's tree,
+/// not a registered submodule) can only be determined by cross-referencing
+/// a parent's `.gitmodules`, which is PR 5a commit 5's job, not this one's.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GitRepository {
+    /// The canonicalized `worktree_path`, matching the same
+    /// `canonicalizeFilePath` convention `src/tabs/identity.ts` already uses
+    /// for tab identity -- paths are the natural, debuggable key here.
+    pub id: String,
+    pub worktree_path: String,
+    /// The resolved git directory -- correct whether `.git` is a directory
+    /// or a file (a submodule or linked worktree), with no special-casing.
+    pub git_dir: String,
+    pub kind: String,
+    pub parent_id: Option<String>,
+    pub submodule_path: Option<String>,
+    pub initialized: bool,
+    pub head: GitHeadState,
+}
+
+fn resolve_head_state(root_dir: &str) -> GitHeadState {
+    let branch = Command::new("git")
+        .args(&["symbolic-ref", "--short", "-q", "HEAD"])
+        .current_dir(root_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let oid = Command::new("git")
+        .args(&["rev-parse", "HEAD"])
+        .current_dir(root_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let mode = match (&branch, &oid) {
+        (Some(_), Some(_)) => "branch",
+        (Some(_), None) => "unborn", // on a named branch, but no commits yet
+        (None, Some(_)) => "detached",
+        (None, None) => "unborn", // defensive: neither a symbolic ref nor a resolvable commit
+    };
+
+    GitHeadState { mode: mode.to_string(), branch, oid }
+}
+
+/// Discovers the Git repository rooted at (or containing) `root_dir`: its
+/// canonical worktree path, resolved git dir, and `HEAD` tri-state.
+pub fn discover_repository(root_dir: &str) -> Result<GitRepository, GitError> {
+    let toplevel_output = run_git(root_dir, "git_discover_repository", &["rev-parse", "--show-toplevel"])?;
+    let worktree_path_raw = String::from_utf8_lossy(&toplevel_output.stdout).trim().to_string();
+    let worktree_path = std::fs::canonicalize(&worktree_path_raw)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or(worktree_path_raw);
+
+    let git_dir_output = run_git(root_dir, "git_discover_repository", &["rev-parse", "--git-dir"])?;
+    let git_dir_raw = String::from_utf8_lossy(&git_dir_output.stdout).trim().to_string();
+    let git_dir_path = Path::new(&git_dir_raw);
+    let git_dir_abs = if git_dir_path.is_absolute() {
+        git_dir_path.to_path_buf()
+    } else {
+        Path::new(&worktree_path).join(git_dir_path)
+    };
+    let git_dir = std::fs::canonicalize(&git_dir_abs)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| git_dir_abs.to_string_lossy().into_owned());
+
+    let git_dir_normalized = git_dir.replace('\\', "/");
+    let kind = if git_dir_normalized.contains("/worktrees/") {
+        "worktree"
+    } else if git_dir_normalized.contains("/modules/") {
+        "submodule"
+    } else {
+        "workspace"
+    };
+
+    let head = resolve_head_state(&worktree_path);
+
+    Ok(GitRepository {
+        id: worktree_path.clone(),
+        worktree_path,
+        git_dir,
+        kind: kind.to_string(),
+        parent_id: None,
+        submodule_path: None,
+        initialized: true,
+        head,
+    })
+}
+
+/// Discovers the Git repository at `root_dir`, including its branch/
+/// detached/unborn `HEAD` tri-state.
+#[tauri::command]
+pub async fn git_discover_repository(root_dir: String) -> Result<GitRepository, GitError> {
+    discover_repository(&root_dir)
+}
+
+/// Lists every linked worktree of the repository at `root_dir` (via
+/// `git worktree list --porcelain`), including the main worktree itself,
+/// each fully discovered via `discover_repository`. This is the checklist's
+/// "Support linked worktrees where present" -- git's own worktree metadata
+/// is the direct discovery primitive for it (not named in the original
+/// checklist, added here since it parses easily alongside this commit's
+/// other work).
+pub fn discover_linked_worktrees(root_dir: &str) -> Result<Vec<GitRepository>, GitError> {
+    let output = run_git(root_dir, "git_discover_linked_worktrees", &["worktree", "list", "--porcelain"])?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    let mut worktrees = Vec::new();
+    for block in text.split("\n\n") {
+        let path = block.lines().find_map(|line| line.strip_prefix("worktree "));
+        if let Some(path) = path {
+            if let Ok(repo) = discover_repository(path) {
+                worktrees.push(repo);
+            }
+        }
+    }
+    Ok(worktrees)
+}
+
+/// Lists every linked worktree of the repository at `root_dir`, including
+/// the main worktree itself.
+#[tauri::command]
+pub async fn git_discover_linked_worktrees(root_dir: String) -> Result<Vec<GitRepository>, GitError> {
+    discover_linked_worktrees(&root_dir)
+}
+
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]

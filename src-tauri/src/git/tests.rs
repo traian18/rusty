@@ -243,3 +243,130 @@ async fn check_is_git_repo_true_and_false() {
     let non_repo = tempfile::TempDir::new().unwrap();
     assert!(!check_is_git_repo(&non_repo.path().to_string_lossy()));
 }
+
+// ── PR 5a commit 4: repository discovery ─────────────────────────────────
+
+#[test]
+fn git_repository_serializes_with_the_documented_field_names() {
+    // Confirms the wire shape end-to-end before PR 5b's types commit
+    // (which must match it field-for-field) is written.
+    let repo = GitRepository {
+        id: "/tmp/repo".to_string(),
+        worktree_path: "/tmp/repo".to_string(),
+        git_dir: "/tmp/repo/.git".to_string(),
+        kind: "workspace".to_string(),
+        parent_id: None,
+        submodule_path: None,
+        initialized: true,
+        head: GitHeadState {
+            mode: "branch".to_string(),
+            branch: Some("main".to_string()),
+            oid: Some("abc123".to_string()),
+        },
+    };
+    let json = serde_json::to_value(&repo).unwrap();
+    assert_eq!(json["id"], "/tmp/repo");
+    assert_eq!(json["worktree_path"], "/tmp/repo");
+    assert_eq!(json["git_dir"], "/tmp/repo/.git");
+    assert_eq!(json["kind"], "workspace");
+    assert_eq!(json["parent_id"], serde_json::Value::Null);
+    assert_eq!(json["submodule_path"], serde_json::Value::Null);
+    assert_eq!(json["initialized"], true);
+    assert_eq!(json["head"]["mode"], "branch");
+    assert_eq!(json["head"]["branch"], "main");
+    assert_eq!(json["head"]["oid"], "abc123");
+}
+
+#[tokio::test]
+async fn discover_repository_reports_branch_mode_for_a_normal_repo() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+
+    let repo = discover_repository(&fx.path_str()).unwrap();
+
+    assert_eq!(repo.kind, "workspace");
+    assert_eq!(repo.head.mode, "branch");
+    assert_eq!(repo.head.branch.as_deref(), Some("main"));
+    assert!(repo.head.oid.is_some());
+    assert_eq!(repo.id, repo.worktree_path);
+    assert!(repo.initialized);
+    assert_eq!(repo.parent_id, None);
+}
+
+#[tokio::test]
+async fn discover_repository_reports_detached_mode_with_no_branch() {
+    let fx = GitFixture::init();
+    let first = fx.commit_file("a.txt", "one\n", "first");
+    fx.detach_to(&first);
+
+    let repo = discover_repository(&fx.path_str()).unwrap();
+
+    assert_eq!(repo.head.mode, "detached");
+    assert_eq!(repo.head.branch, None);
+    assert_eq!(repo.head.oid.as_deref(), Some(first.as_str()));
+}
+
+#[tokio::test]
+async fn discover_repository_reports_unborn_mode_with_the_pending_branch_name() {
+    // git init already points HEAD at a named branch before the first
+    // commit exists -- unborn and "on a named branch" are not mutually
+    // exclusive, which is exactly why this is a tri-state, not a bool.
+    let fx = GitFixture::init();
+
+    let repo = discover_repository(&fx.path_str()).unwrap();
+
+    assert_eq!(repo.head.mode, "unborn");
+    assert_eq!(repo.head.branch.as_deref(), Some("main"));
+    assert_eq!(repo.head.oid, None);
+}
+
+#[tokio::test]
+async fn discover_repository_resolves_a_linked_worktrees_git_file_correctly() {
+    let main = GitFixture::init();
+    main.commit_file("a.txt", "one\n", "initial commit");
+    let worktree = main.add_linked_worktree("wt", "feature");
+
+    let repo = discover_repository(&worktree.path_str()).unwrap();
+
+    assert_eq!(repo.kind, "worktree");
+    assert_eq!(repo.head.mode, "branch");
+    assert_eq!(repo.head.branch.as_deref(), Some("feature"));
+    // git_dir must resolve to the REAL git dir under the main repo's
+    // .git/worktrees/<name> -- not a literal ".git" path inside the
+    // worktree itself, whose .git is a FILE, not a directory.
+    assert!(repo.git_dir.contains("worktrees"), "expected a worktrees-scoped git dir, got: {}", repo.git_dir);
+    assert!(!std::path::Path::new(&worktree.path_str()).join(".git").is_dir());
+}
+
+#[tokio::test]
+async fn discover_linked_worktrees_lists_the_main_worktree_and_its_linked_ones() {
+    let main = GitFixture::init();
+    main.commit_file("a.txt", "one\n", "initial commit");
+    main.add_linked_worktree("wt", "feature");
+
+    let worktrees = discover_linked_worktrees(&main.path_str()).unwrap();
+
+    assert_eq!(worktrees.len(), 2);
+    assert!(worktrees.iter().any(|w| w.kind == "workspace" && w.head.branch.as_deref() == Some("main")));
+    assert!(worktrees.iter().any(|w| w.kind == "worktree" && w.head.branch.as_deref() == Some("feature")));
+}
+
+#[tokio::test]
+async fn discover_repository_identifies_an_initialized_submodule_by_its_modules_git_dir() {
+    // Cross-referencing .gitmodules/submodule status is PR 5a commit 5's
+    // job -- but a single-repo discover_repository call can already tell
+    // "this IS some parent's initialized submodule" just from its own
+    // resolved git dir containing a /modules/ segment, with no parent
+    // context needed at all.
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+
+    let submodule_path = std::path::Path::new(&parent.path_str()).join("sub");
+    let repo = discover_repository(&submodule_path.to_string_lossy()).unwrap();
+
+    assert_eq!(repo.kind, "submodule");
+}

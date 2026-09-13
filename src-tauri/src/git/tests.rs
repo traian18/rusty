@@ -267,6 +267,7 @@ fn git_repository_serializes_with_the_documented_field_names() {
             branch: Some("main".to_string()),
             oid: Some("abc123".to_string()),
         },
+        submodule_state: None,
     };
     let json = serde_json::to_value(&repo).unwrap();
     assert_eq!(json["id"], "/tmp/repo");
@@ -279,6 +280,7 @@ fn git_repository_serializes_with_the_documented_field_names() {
     assert_eq!(json["head"]["mode"], "branch");
     assert_eq!(json["head"]["branch"], "main");
     assert_eq!(json["head"]["oid"], "abc123");
+    assert_eq!(json["submodule_state"], serde_json::Value::Null);
 }
 
 #[tokio::test]
@@ -648,4 +650,81 @@ async fn git_blame_works_normally_for_a_real_in_worktree_file() {
     let lines = git_blame(fx.path_str(), file_path.to_string_lossy().into_owned()).await.unwrap();
 
     assert_eq!(lines.len(), 2);
+}
+
+// ── PR 5a commit 11: submodule state classification ──────────────────────
+
+#[tokio::test]
+async fn discover_submodules_reports_a_clean_initialized_submodule() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+
+    let sub = &submodules[0];
+    let state = sub.submodule_state.as_ref().expect("expected a classified state for an initialized submodule");
+    assert!(!state.changed_gitlink);
+    assert!(!state.modified_worktree);
+    assert!(!state.untracked_content);
+}
+
+#[tokio::test]
+async fn discover_submodules_reports_a_dirty_submodule_with_a_modified_parent_gitlink() {
+    // The scenario PR 5's fixture checklist names explicitly: a submodule
+    // that is BOTH dirty (uncommitted local changes) AND has a gitlink
+    // that no longer matches what the parent recorded (a new commit made
+    // inside the submodule without the parent re-staging it).
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+
+    let submodule_dir = std::path::Path::new(&parent.path_str()).join("sub");
+    // A new commit inside the submodule -- the parent's recorded gitlink
+    // now points at an older commit than what's actually checked out.
+    std::fs::write(submodule_dir.join("readme.md"), "committed change\n").unwrap();
+    let commit_in_sub = std::process::Command::new("git")
+        .args([
+            "-c", "user.name=Rusty Test",
+            "-c", "user.email=test@rusty.invalid",
+            "-c", "commit.gpgsign=false",
+            "commit", "-am", "change in sub",
+        ])
+        .current_dir(&submodule_dir)
+        .output()
+        .unwrap();
+    assert!(commit_in_sub.status.success(), "failed to commit inside the submodule: {}", String::from_utf8_lossy(&commit_in_sub.stderr));
+    // Also leave the submodule's own working tree dirty on top of that.
+    std::fs::write(submodule_dir.join("untracked.txt"), "new\n").unwrap();
+
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+
+    let sub = &submodules[0];
+    let state = sub.submodule_state.as_ref().expect("expected a classified state for an initialized submodule");
+    assert!(state.changed_gitlink, "expected the gitlink to be reported as changed");
+    assert!(state.untracked_content, "expected untracked content to be reported");
+}
+
+#[tokio::test]
+async fn discover_submodules_reports_no_state_for_an_uninitialized_submodule() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+    parent.git_ok(&["submodule", "deinit", "-f", "sub"]);
+
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+
+    assert_eq!(submodules[0].submodule_state, None, "an uninitialized submodule has no working tree to classify");
 }

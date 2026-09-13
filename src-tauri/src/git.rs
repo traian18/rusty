@@ -1353,6 +1353,69 @@ pub struct GitRepository {
     pub submodule_path: Option<String>,
     pub initialized: bool,
     pub head: GitHeadState,
+    /// Only populated for an initialized `kind: "submodule"` entry -- an
+    /// uninitialized one has no working tree to classify, and a
+    /// non-submodule entry doesn't have this concept at all.
+    pub submodule_state: Option<SubmoduleState>,
+}
+
+/// The dirty-state of an initialized submodule, distinguishing the three
+/// states REFACTOR_PLAN.md's PR 5 checklist names beyond plain
+/// initialized/uninitialized. Unlike everything else this file parses,
+/// these three are only distinguishable via `git status --porcelain=v2`'s
+/// dedicated 4-char `<sub>` field (`S<c><m><u>`) -- porcelain v1 (what
+/// `git_status` otherwise standardizes on) collapses all three into one
+/// bare `" M"` marker for the submodule's gitlink path, confirmed
+/// directly. A one-off, scoped use of v2 for this specific question does
+/// not reopen the v1-vs-v2 decision for `git_status` itself, which has a
+/// completely different shape to preserve.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SubmoduleState {
+    /// The submodule's checked-out commit differs from what the parent's
+    /// index/tree records (a "changed gitlink").
+    pub changed_gitlink: bool,
+    /// Working tree has uncommitted changes to tracked files.
+    pub modified_worktree: bool,
+    /// Working tree has untracked files.
+    pub untracked_content: bool,
+}
+
+/// Classifies the dirty-state of the (already initialized) submodule at
+/// `submodule_relative_path` within `parent_root`, via
+/// `git status --porcelain=v2 -z`'s dedicated submodule field. Returns the
+/// all-false default if the query fails or the path isn't reported (e.g.
+/// genuinely clean, in which case it simply doesn't appear in status
+/// output at all -- verified directly).
+fn classify_submodule_state(parent_root: &str, submodule_relative_path: &str) -> SubmoduleState {
+    let output = Command::new("git")
+        .args(&["status", "--porcelain=v2", "-z", "--", submodule_relative_path])
+        .current_dir(parent_root)
+        .output();
+    let Ok(output) = output else { return SubmoduleState::default() };
+    if !output.status.success() {
+        return SubmoduleState::default();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    for record in text.split('\0') {
+        // Ordinary changed-entry record: "1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>"
+        if !record.starts_with("1 ") {
+            continue;
+        }
+        let fields: Vec<&str> = record.splitn(9, ' ').collect();
+        if fields.len() < 9 {
+            continue;
+        }
+        let sub_field = fields[2];
+        let chars: Vec<char> = sub_field.chars().collect();
+        if chars.len() == 4 && chars[0] == 'S' {
+            return SubmoduleState {
+                changed_gitlink: chars[1] == 'C',
+                modified_worktree: chars[2] == 'M',
+                untracked_content: chars[3] == 'U',
+            };
+        }
+    }
+    SubmoduleState::default()
 }
 
 fn resolve_head_state(root_dir: &str) -> GitHeadState {
@@ -1425,6 +1488,10 @@ pub fn discover_repository(root_dir: &str) -> Result<GitRepository, GitError> {
         submodule_path: None,
         initialized: true,
         head,
+        // This function has no parent context to classify against --
+        // discover_submodules() is what populates this, once it knows
+        // both the parent and the submodule's relative path within it.
+        submodule_state: None,
     })
 }
 
@@ -1527,26 +1594,31 @@ pub fn discover_submodules(root_dir: &str) -> Result<Vec<GitRepository>, GitErro
         let full_path = Path::new(root_dir).join(&entry.relative_path);
         let full_path_str = full_path.to_string_lossy().into_owned();
 
-        // A top-level entry's parent is root_dir itself; a nested one's
+        // A top-level entry's immediate parent is root_dir itself, and its
+        // path within that parent is its own relative_path; a nested one's
         // ("outer-sub/inner") immediate parent is the outer submodule's own
-        // checked-out path -- which, since --recursive could only produce
-        // this line by having already descended into it, is guaranteed to
-        // already be initialized and therefore discoverable.
-        let parent_id = if entry.relative_path.contains('/') {
-            full_path
-                .parent()
-                .and_then(|p| discover_repository(&p.to_string_lossy()).ok())
-                .map(|r| r.id)
-                .unwrap_or_else(|| root_repo.id.clone())
-        } else {
-            root_repo.id.clone()
+        // checked-out directory -- which, since --recursive could only
+        // produce this line by having already descended into it, is
+        // guaranteed to already be initialized and therefore discoverable --
+        // and its path within THAT parent is just its own last segment
+        // ("inner"), not the full nested path.
+        let (immediate_parent_dir, path_within_immediate_parent) = match full_path.parent() {
+            Some(parent) if entry.relative_path.contains('/') => (
+                parent.to_string_lossy().into_owned(),
+                full_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            ),
+            _ => (root_dir.to_string(), entry.relative_path.clone()),
         };
+        let parent_id = discover_repository(&immediate_parent_dir)
+            .map(|r| r.id)
+            .unwrap_or_else(|_| root_repo.id.clone());
 
         if entry.initialized {
             if let Ok(mut repo) = discover_repository(&full_path_str) {
                 repo.kind = "submodule".to_string();
                 repo.parent_id = Some(parent_id);
                 repo.submodule_path = Some(entry.relative_path);
+                repo.submodule_state = Some(classify_submodule_state(&immediate_parent_dir, &path_within_immediate_parent));
                 results.push(repo);
             }
             // If discover_repository fails despite git reporting this
@@ -1569,6 +1641,8 @@ pub fn discover_submodules(root_dir: &str) -> Result<Vec<GitRepository>, GitErro
                 // consumer should check `initialized` before reading `head`
                 // at all for a submodule entry.
                 head: GitHeadState { mode: "unborn".to_string(), branch: None, oid: Some(entry.sha) },
+                // No working tree exists to classify at all.
+                submodule_state: None,
             });
         }
     }

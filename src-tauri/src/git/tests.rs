@@ -181,6 +181,53 @@ async fn git_scan_subprojects_skips_ignored_directory_names() {
     );
 }
 
+#[test]
+fn git_error_serializes_to_the_documented_json_shape() {
+    // PR 5a commit 2: confirms GitError's wire shape end-to-end before the
+    // mechanical sweep (commit 3) converts every other command to it --
+    // this is what the frontend's new TS-facing type (PR 5b commit 14)
+    // must match field-for-field.
+    let error = GitError {
+        operation: "git_commit".to_string(),
+        repository: "/tmp/repo".to_string(),
+        exit_code: Some(1),
+        stderr: "nothing to commit".to_string(),
+        message: "nothing to commit".to_string(),
+    };
+    let json = serde_json::to_value(&error).unwrap();
+    assert_eq!(json["operation"], "git_commit");
+    assert_eq!(json["repository"], "/tmp/repo");
+    assert_eq!(json["exit_code"], 1);
+    assert_eq!(json["stderr"], "nothing to commit");
+    assert_eq!(json["message"], "nothing to commit");
+}
+
+#[tokio::test]
+async fn git_commit_with_nothing_staged_returns_a_structured_git_error() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+    // Nothing staged -- `git commit -m ...` exits non-zero with a message
+    // on stdout, not stderr (this is the exact case run_git's
+    // stderr-or-stdout-fallback message construction exists for).
+
+    let result = git_commit(fx.path_str(), "empty commit attempt".to_string()).await;
+
+    let err = result.unwrap_err();
+    assert_eq!(err.operation, "git_commit");
+    assert_eq!(err.repository, fx.path_str());
+    assert_eq!(err.exit_code, Some(1));
+    assert!(err.message.contains("nothing to commit") || err.message.contains("nothing added"), "unexpected message: {}", err.message);
+}
+
+#[tokio::test]
+async fn git_init_on_an_unwritable_path_returns_a_structured_git_error() {
+    let result = git_init("/no/such/path/rusty-test-fixture".to_string()).await;
+
+    let err = result.unwrap_err();
+    assert_eq!(err.operation, "git_init");
+    assert_eq!(err.exit_code, None, "expected a spawn/cwd failure, not a git exit code");
+}
+
 #[tokio::test]
 async fn check_is_git_repo_true_and_false() {
     let fx = GitFixture::init();

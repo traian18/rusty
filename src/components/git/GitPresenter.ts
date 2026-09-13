@@ -12,7 +12,12 @@ export const gitPresenter: GitActions = {
       notify("Commit Complete", "Successfully committed staged modifications.", "success");
     } catch (err: any) {
       console.error("Failed to commit git modifications:", err);
-      notify("Commit Failed", String(err), "error");
+      // git_commit now rejects with a structured GitError object (PR 5a),
+      // not a bare string -- String(err) would print "[object Object]" for
+      // it. `?? String(err)` keeps this correct for the remaining
+      // not-yet-converted commands' plain-string errors during the PR 5a
+      // migration window.
+      notify("Commit Failed", err?.message ?? String(err), "error");
       throw err;
     }
   },

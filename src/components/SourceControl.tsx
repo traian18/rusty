@@ -186,7 +186,11 @@ const SourceControl: React.FC = () => {
       await loadRepoData();
     } catch (err: any) {
       console.error("Failed to initialize git repository:", err);
-      notify("Error", `Error initializing Git: ${err}`, "error");
+      // git_init now rejects with a structured GitError object (PR 5a), not
+      // a bare string -- `${err}` would print "[object Object]" for it.
+      // `?? err` keeps this correct for the remaining not-yet-converted
+      // commands' plain-string errors during the PR 5a migration window.
+      notify("Error", `Error initializing Git: ${err?.message ?? err}`, "error");
     } finally {
       setInitLoading(false);
     }

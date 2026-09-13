@@ -35,6 +35,67 @@ pub struct SmartBranchSwitchResult {
     pub restored: bool,
 }
 
+/// Structured error for every git.rs command, replacing the previous bare
+/// `Result<T, String>` with enough detail (operation, repository, exit code,
+/// raw stderr) for the frontend to branch on, not just display. `message`
+/// is the human-readable summary (stderr, or stdout when stderr is empty --
+/// generalizing what `git_merge_branch`/`git_rebase_branch` used to do
+/// ad hoc only for themselves).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GitError {
+    pub operation: String,
+    pub repository: String,
+    pub exit_code: Option<i32>,
+    pub stderr: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for GitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for GitError {}
+
+/// Runs `git <args>` in `repo`, returning `Ok(Output)` only on a zero exit
+/// code (spawn failures and non-zero exits both become `GitError`). This is
+/// the one place every command in this module routes its git invocations
+/// through, replacing ~26 independently duplicated
+/// `Command::new("git")...output().map_err(...)` blocks with inconsistent
+/// success/failure branching.
+fn run_git(repo: &str, operation: &str, args: &[&str]) -> Result<std::process::Output, GitError> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .map_err(|e| GitError {
+            operation: operation.to_string(),
+            repository: repo.to_string(),
+            exit_code: None,
+            stderr: String::new(),
+            message: format!("Failed to run git: {e}"),
+        })?;
+
+    if output.status.success() {
+        Ok(output)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if stderr.is_empty() {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        } else {
+            stderr.clone()
+        };
+        Err(GitError {
+            operation: operation.to_string(),
+            repository: repo.to_string(),
+            exit_code: output.status.code(),
+            stderr,
+            message,
+        })
+    }
+}
+
 fn git_command(root_dir: &str, args: &[&str]) -> Result<std::process::Output, String> {
     Command::new("git")
         .args(args)
@@ -271,18 +332,9 @@ pub async fn git_status(root_dir: String) -> Result<GitStatusResult, String> {
 
 /// Initializes a new Git repository in the specified directory path.
 #[tauri::command]
-pub async fn git_init(root_dir: String) -> Result<(), String> {
-    let output = Command::new("git")
-        .arg("init")
-        .current_dir(&root_dir)
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned())
-    }
+pub async fn git_init(root_dir: String) -> Result<(), GitError> {
+    run_git(&root_dir, "git_init", &["init"])?;
+    Ok(())
 }
 
 /// Stages a file by executing `git add <file>`.
@@ -463,18 +515,9 @@ pub async fn git_discard_changes(root_dir: String, file_path: String) -> Result<
 
 /// Commits all currently staged changes with the provided commit message.
 #[tauri::command]
-pub async fn git_commit(root_dir: String, message: String) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(&["commit", "-m", &message])
-        .current_dir(&root_dir)
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned())
-    }
+pub async fn git_commit(root_dir: String, message: String) -> Result<(), GitError> {
+    run_git(&root_dir, "git_commit", &["commit", "-m", &message])?;
+    Ok(())
 }
 
 /// Returns the content of the file at the `HEAD` commit.

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { AgentHarnessClient, type AgentTransport, type RunEvent } from "./agentHarnessClient";
-import { AGENT_PROTOCOL_VERSION } from "../../shared/agent-protocol";
+import { AGENT_PROTOCOL_VERSION, parseAgentMessage, unwrapEnvelope } from "../../shared/agent-protocol";
 
 /**
  * PR 4c commit 3: proves AgentTransport is a real abstraction (something
@@ -90,6 +90,31 @@ describe("AgentHarnessClient over a fake AgentTransport", () => {
       conversationId: "conversation-1",
       sequence: 1,
     });
+  });
+
+  // PR 4c commit 8: a contract test, not a characterization test -- it feeds
+  // the envelope AgentHarnessClient itself actually put on the wire (not a
+  // hand-built fixture) through the very same parseAgentMessage/unwrapEnvelope
+  // functions the sidecar's server.ts dispatch loop calls on every inbound
+  // message, so it fails if the client's construction ever stops producing
+  // something the shared parser accepts as "modern".
+  it("the envelope AgentHarnessClient actually sends parses as the sidecar would parse it", async () => {
+    const connectPromise = client.connect();
+    transport.simulateOpen();
+    transport.simulateMessage({ type: "protocol.welcome", protocolVersion: AGENT_PROTOCOL_VERSION, capabilities: [], connectionId: "conn-1" });
+    await connectPromise;
+
+    await client.startRun({ type: "agent_chat", runId: "run-1", conversationId: "conversation-1" });
+    const wireMessage = transport.sent[1];
+
+    const parsed = parseAgentMessage(wireMessage);
+    expect(parsed.kind).toBe("modern");
+    if (parsed.kind !== "modern") throw new Error("expected a modern envelope");
+    expect(parsed.value.runId).toBe("run-1");
+    expect(parsed.value.type).toBe("agent_chat");
+
+    const flat = unwrapEnvelope(parsed.value);
+    expect(flat).toMatchObject({ type: "agent_chat", runId: "run-1", conversationId: "conversation-1" });
   });
 
   it("delivers a modern envelope from the fake transport to the run's subscriber", async () => {

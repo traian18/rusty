@@ -32,7 +32,8 @@ import {
 const SourceControl: React.FC = () => {
   // ── Store ──────────────────────────────────────────────────
   const rootPath = useWorkspaceStore((state) => state.rootPath);
-  const gitStatus = useWorkspaceStore((state) => state.gitStatus);
+  const gitStatusSingleSlot = useWorkspaceStore((state) => state.gitStatus);
+  const statusByRepositoryId = useWorkspaceStore((state) => state.statusByRepositoryId);
   const loadGitStatus = useWorkspaceStore((state) => state.loadGitStatus);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const lastRename = useWorkspaceStore((state) => state.lastRename);
@@ -52,6 +53,17 @@ const SourceControl: React.FC = () => {
   const activeRepository = repositories.find((repo) => repo.id === activeRepositoryId) ?? null;
   const activeRepo = activeRepository?.worktreePath ?? rootPath;
   const subprojects = repositories.map((repo) => repo.worktreePath);
+
+  // Prefers the per-repository status (REFACTOR_PLAN.md PR 5b commit 21)
+  // over the deprecated single-slot gitStatus -- the single slot gets
+  // overwritten by *any* loadGitStatus() call anywhere in the app,
+  // including ones scoped to a different repository (e.g. GitPresenter's
+  // own post-action refresh, or another tab's unrelated workspace-wide
+  // reload), so it could show another repository's status for whatever
+  // moment such a call landed. Falls back to it only when this repository's
+  // own entry hasn't been loaded into statusByRepositoryId yet.
+  const gitStatus =
+    (activeRepositoryId && statusByRepositoryId[activeRepositoryId]) || gitStatusSingleSlot;
 
   // ── Local State ────────────────────────────────────────────
   const [commitMsg, setCommitMsg] = useState("");

@@ -9,7 +9,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Committing staged changes at ${rootDir} with message: "${message}"`);
     try {
       await invoke("git_commit", { rootDir, message });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       notify("Commit Complete", "Successfully committed staged modifications.", "success");
     } catch (err: any) {
       console.error("Failed to commit git modifications:", err);
@@ -34,7 +34,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Pulling changes at ${rootDir}`);
     try {
       await invoke("git_pull", { rootDir });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       // Refresh directory tree
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
@@ -50,7 +50,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Staging file ${filePath}`);
     try {
       await invoke("git_stage_file", { rootDir, filePath });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
     } catch (err: any) {
       console.error(`Failed to stage file:`, err);
       notify("Stage Failed", errorMessage(err), "error");
@@ -62,7 +62,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Unstaging file ${filePath}`);
     try {
       await invoke("git_unstage_file", { rootDir, filePath });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
     } catch (err: any) {
       console.error(`Failed to unstage file:`, err);
       notify("Unstage Failed", errorMessage(err), "error");
@@ -74,7 +74,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Adding to .gitignore: ${filePath}`);
     try {
       await invoke("git_add_to_gitignore", { rootDir, filePath });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Added to .gitignore", "File will no longer show up as a change.", "success");
@@ -100,7 +100,7 @@ export const gitPresenter: GitActions = {
 
     try {
       await invoke("git_discard_changes", { rootDir, filePath });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       // Reload directory tree
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
@@ -125,7 +125,7 @@ export const gitPresenter: GitActions = {
 
     try {
       await invoke("git_discard_all_changes", { rootDir });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       // Reload directory tree
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
@@ -144,7 +144,7 @@ export const gitPresenter: GitActions = {
       // Unmount branch-specific editors and clear the old tree only after the
       // checkout succeeds, so a failed checkout leaves the current view intact.
       useWorkspaceStore.getState().resetForBranchChange();
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       const display = branchName.startsWith("origin/") ? branchName.substring(7) : branchName;
@@ -164,7 +164,7 @@ export const gitPresenter: GitActions = {
       const result = await invoke<{ stashed: boolean; restored: boolean }>("git_smart_create_branch", { rootDir, branchName, checkout });
       if (checkout) {
         useWorkspaceStore.getState().resetForBranchChange();
-        await useWorkspaceStore.getState().loadGitStatus();
+        await useWorkspaceStore.getState().loadGitStatus(rootDir);
         const tree: any[] = await invoke("get_directory_structure", { rootDir });
         useWorkspaceStore.getState().setFileTree(tree);
       }
@@ -188,7 +188,7 @@ export const gitPresenter: GitActions = {
       } else {
         await invoke("git_delete_branch", { rootDir, branchName, force });
       }
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       notify("Branch Deleted", `Successfully deleted branch: ${branchName}`, "success");
     } catch (err: any) {
       console.error("Failed to delete branch:", err);
@@ -201,7 +201,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Merging branch ${branchName} into current`);
     try {
       const result = await invoke("git_merge_branch", { rootDir, branchName });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Merge Complete", String(result) || `Merged ${branchName} into current.`, "success");
@@ -220,7 +220,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Rebasing current branch onto ${branchName}`);
     try {
       const result = await invoke("git_rebase_branch", { rootDir, branchName });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Rebase Complete", String(result) || `Rebased onto ${branchName}.`, "success");
@@ -243,7 +243,7 @@ export const gitPresenter: GitActions = {
       } catch {
         await invoke("git_abort_pending", { rootDir, operation: "merge" });
       }
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Operation Aborted", "Aborted pending conflict operation.", "success");
@@ -257,7 +257,7 @@ export const gitPresenter: GitActions = {
     console.log(`GitPresenter: Undoing last move/rename: ${newPath} -> ${originalPath}`);
     try {
       await invoke("git_undo_last_rename", { rootDir, originalPath, newPath });
-      await useWorkspaceStore.getState().loadGitStatus();
+      await useWorkspaceStore.getState().loadGitStatus(rootDir);
       const tree: any[] = await invoke("get_directory_structure", { rootDir });
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Undo Complete", "Move/rename has been undone.", "success");

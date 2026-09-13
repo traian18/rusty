@@ -58,7 +58,6 @@ export interface ProtocolError {
 export type ParsedAgentMessage =
   | { kind: "hello"; value: ProtocolHello }
   | { kind: "modern"; value: AgentEnvelope }
-  | { kind: "legacy"; value: Record<string, unknown> }
   | { kind: "invalid"; error: ProtocolError };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,7 +114,10 @@ export function parseAgentMessage(value: unknown): ParsedAgentMessage {
       return protocolError("PROTOCOL_INVALID_MESSAGE", error instanceof Error ? error.message : String(error));
     }
   }
-  return { kind: "legacy", value };
+  return protocolError(
+    "PROTOCOL_INVALID_MESSAGE",
+    "Message is missing protocolVersion -- un-enveloped (legacy) messages are no longer accepted."
+  );
 }
 
 export function negotiateProtocol(hello: ProtocolHello): number | undefined {

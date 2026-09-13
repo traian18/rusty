@@ -48,9 +48,10 @@ test("selects the highest mutually supported version", () => {
   assert.equal(negotiateProtocol({ type: "protocol.hello", supportedVersions: [1], capabilities: [] }), undefined);
 });
 
-test("isolates legacy messages in the compatibility parse result", () => {
+test("rejects un-enveloped (legacy) messages -- nothing in this codebase produces them anymore", () => {
   const parsed = parseAgentMessage({ type: "agent_chat", tabId: "tab-1" });
-  assert.equal(parsed.kind, "legacy");
+  assert.equal(parsed.kind, "invalid");
+  if (parsed.kind === "invalid") assert.equal(parsed.error.error.code, "PROTOCOL_INVALID_MESSAGE");
 });
 
 test("returns a structured error for unsupported envelope versions", () => {

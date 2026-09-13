@@ -467,12 +467,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
       enableProtocolConnection(ws, connectionId, selectedVersion);
       return;
     }
-    const data: any = parsedMessage.kind === "modern"
-      ? unwrapEnvelope(parsedMessage.value)
-      : parsedMessage.value;
-    if (parsedMessage.kind === "legacy") {
-      console.warn(`WebSocket [Protocol] Legacy message received: ${String(data.type || "unknown")}`);
-    }
+    const data: any = unwrapEnvelope(parsedMessage.value);
 
     console.log(`WebSocket [Server] Received message type: ${data.type}`);
 

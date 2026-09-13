@@ -281,19 +281,15 @@ export class AgentHarnessClient {
       this.emitDiagnostic("client.invalid_message", { detail: parsed.kind === "invalid" ? parsed.error.error.message : "Unexpected hello." });
       return;
     }
-    const flat = parsed.kind === "modern" ? unwrapEnvelope(parsed.value) : parsed.value;
+    const flat = unwrapEnvelope(parsed.value);
     if (typeof flat.type !== "string") return;
-    const runId = parsed.kind === "modern"
-      ? parsed.value.runId
-      : String(flat.runId || flat.tabId || flat.nodeId || flat.sessionId || "legacy");
-    if (parsed.kind === "modern") {
-      const previous = this.incomingSequences.get(runId) || 0;
-      if (parsed.value.sequence <= previous) return;
-      if (previous > 0 && parsed.value.sequence > previous + 1) {
-        this.emitDiagnostic("client.sequence_gap", { runId, expected: previous + 1, received: parsed.value.sequence });
-      }
-      this.incomingSequences.set(runId, parsed.value.sequence);
+    const runId = parsed.value.runId;
+    const previous = this.incomingSequences.get(runId) || 0;
+    if (parsed.value.sequence <= previous) return;
+    if (previous > 0 && parsed.value.sequence > previous + 1) {
+      this.emitDiagnostic("client.sequence_gap", { runId, expected: previous + 1, received: parsed.value.sequence });
     }
+    this.incomingSequences.set(runId, parsed.value.sequence);
     const event = { ...flat, type: flat.type, runId } as RunEvent;
     for (const listener of this.listeners.get(runId) || []) listener(event);
     for (const listener of this.allListeners) listener(event);

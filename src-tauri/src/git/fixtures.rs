@@ -57,7 +57,6 @@ impl GitFixture {
 
     /// Creates a bare repository (no working tree) -- useful as a submodule
     /// source or a "repository without a remote" fixture in later tests.
-    #[allow(dead_code)]
     pub fn init_bare() -> Self {
         let root = TempDir::new().expect("failed to create temp dir for bare git fixture");
         Self::init_at(Root::Owned(root), &["init", "--bare"])
@@ -220,11 +219,41 @@ impl GitFixture {
     }
 
     /// Adds `source` (another local repository) as a submodule at `rel`.
-    /// Requires `protocol.file.allow=always`, set at `init()` time.
-    #[allow(dead_code)]
+    ///
+    /// Passes `-c protocol.file.allow=always` directly on this invocation --
+    /// verified against git 2.45.0 that the *local* `protocol.file.allow`
+    /// config `init_at()` sets (which governs every other git operation this
+    /// fixture performs) is NOT consulted for a submodule clone; only a
+    /// `-c` flag on the invoking command line (or global/system config,
+    /// both of which this harness deliberately blocks) satisfies the file-
+    /// transport check here. The original doc comment claiming local config
+    /// was sufficient was wrong and untested (this method was `#[allow(dead_code)]`
+    /// until PR 5 commit 1 first exercised it).
     pub fn add_submodule(&self, source: &Path, rel: &str) -> &Self {
-        self.git_ok(&["submodule", "add", &source.to_string_lossy(), rel]);
+        self.git_ok(&["-c", "protocol.file.allow=always", "submodule", "add", &source.to_string_lossy(), rel]);
         self
+    }
+
+    /// Adds a linked worktree at `rel` (inside this fixture's own temp
+    /// directory, so cleanup stays owned by this fixture), checked out onto
+    /// a new branch `branch`. Returns a fixture wrapping the worktree's own
+    /// path -- its `.git` is a *file* pointing back at the main repository's
+    /// `.git/worktrees/<name>`, exactly the "`.git` file" case PR 5's
+    /// repository discovery must handle without special-casing.
+    pub fn add_linked_worktree(&self, rel: &str, branch: &str) -> GitFixture {
+        let worktree_path = self.root.path().join(rel);
+        self.git_ok(&[
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            &worktree_path.to_string_lossy(),
+        ]);
+        GitFixture {
+            root: Root::Nested(worktree_path),
+            empty_config: self.empty_config.clone(),
+            empty_hooks_dir: self.empty_hooks_dir.clone(),
+        }
     }
 
     /// Creates a second, independent repository nested inside this one's
@@ -235,5 +264,91 @@ impl GitFixture {
         let nested_root = self.root.path().join(rel);
         std::fs::create_dir_all(&nested_root).expect("failed to create nested repo dir");
         GitFixture::init_at(Root::Nested(nested_root), &["init"])
+    }
+}
+
+/// Smoke tests for the fixture builders themselves (not any git.rs
+/// production behavior -- that's tests.rs's job, from PR 5 commit 4 onward).
+/// PR 5 commit 1: proves init_bare/add_submodule/add_linked_worktree, which
+/// were written ahead of the production code that will consume them, are
+/// mechanically sound before anything depends on them.
+#[cfg(test)]
+mod smoke_tests {
+    use super::GitFixture;
+
+    #[test]
+    fn init_bare_creates_a_bare_repository_with_no_working_tree() {
+        let bare = GitFixture::init_bare();
+        // A bare repo's own root IS its git dir -- HEAD lives directly under it.
+        assert!(std::path::Path::new(&bare.path_str()).join("HEAD").exists());
+    }
+
+    #[test]
+    fn add_submodule_registers_gitmodules_and_checks_out_the_submodule() {
+        let source = GitFixture::init();
+        source.commit_file("readme.md", "hi\n", "source initial commit");
+
+        let parent = GitFixture::init();
+        parent.commit_file("a.txt", "one\n", "parent initial commit");
+        parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+
+        let gitmodules_path = std::path::Path::new(&parent.path_str()).join(".gitmodules");
+        assert!(gitmodules_path.exists(), "expected .gitmodules to be created");
+        let contents = std::fs::read_to_string(&gitmodules_path).unwrap();
+        assert!(contents.contains("path = sub"));
+        assert!(
+            std::path::Path::new(&parent.path_str()).join("sub").join("readme.md").exists(),
+            "expected the submodule to be checked out into the parent's working tree"
+        );
+    }
+
+    #[test]
+    fn add_linked_worktree_creates_a_git_file_pointing_back_at_the_main_repository() {
+        let main = GitFixture::init();
+        main.commit_file("a.txt", "one\n", "initial commit");
+        let worktree = main.add_linked_worktree("wt", "feature");
+
+        let dot_git = std::path::Path::new(&worktree.path_str()).join(".git");
+        assert!(dot_git.is_file(), "a linked worktree's .git must be a FILE, not a directory");
+        let contents = std::fs::read_to_string(&dot_git).unwrap();
+        assert!(contents.starts_with("gitdir:"), "expected a `gitdir: <path>` pointer, got: {contents}");
+    }
+
+    #[test]
+    fn nested_submodule_is_reachable_via_the_outer_submodules_own_working_tree() {
+        // A submodule of a submodule: composed from existing helpers rather
+        // than a dedicated method, since it's just add_submodule applied
+        // twice at different levels.
+        let innermost = GitFixture::init();
+        innermost.commit_file("leaf.md", "leaf\n", "innermost initial commit");
+
+        let middle = GitFixture::init();
+        middle.commit_file("a.txt", "one\n", "middle initial commit");
+        middle.add_submodule(std::path::Path::new(&innermost.path_str()), "inner");
+        middle.git_ok(&["commit", "-m", "add inner submodule"]);
+
+        let outer = GitFixture::init();
+        outer.commit_file("a.txt", "one\n", "outer initial commit");
+        outer.add_submodule(std::path::Path::new(&middle.path_str()), "outer-sub");
+        // `submodule add` clones "middle" but does not recursively check out
+        // ITS OWN submodule ("inner") -- a plain clone never follows
+        // gitlinks. `--init --recursive` is what actually populates nested
+        // submodule content, which is the scenario PR 5 commit 5's
+        // "nested submodules" fixture test needs to exist against.
+        // `-c protocol.file.allow=always` is passed explicitly (not just
+        // relying on outer's own local config) because the second-level
+        // clone (of "inner") runs inside "outer-sub", a fresh submodule
+        // checkout with no local config of its own -- the top-level `-c`
+        // flag applies to the whole recursive operation regardless.
+        outer.git_ok(&["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+
+        let nested_leaf = std::path::Path::new(&outer.path_str())
+            .join("outer-sub")
+            .join("inner")
+            .join("leaf.md");
+        assert!(
+            nested_leaf.exists(),
+            "expected the nested submodule's file to be reachable through the outer submodule's checkout"
+        );
     }
 }

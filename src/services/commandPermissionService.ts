@@ -14,19 +14,16 @@ export interface CommandPermissionSocket {
   send(data: string): void;
 }
 
-export type CommandPermissionDecision = "deny" | "allow_once" | "allow_session";
-export type CommandRisk = "normal" | "elevated" | "destructive";
-export type CommandSessionGrantScope = "executable" | "exact_command";
-
-export interface CommandPermissionRequest {
-  requestId: string;
-  sessionId: string;
-  command: { program: string; args: string[]; cwd: string; timeoutMs: number };
-  risk: CommandRisk;
-  sessionGrantScope: CommandSessionGrantScope;
-  sessionGrantProgram: string;
-  description: string;
-}
+// Moved to shared/agent-protocol/rpc.ts (PR 4c) so both the client and the
+// sidecar share one definition; re-exported here unchanged so existing
+// importers of this module are unaffected.
+export type {
+  CommandPermissionDecision,
+  CommandRisk,
+  CommandSessionGrantScope,
+  CommandPermissionRequest,
+} from "../../shared/agent-protocol";
+import type { CommandPermissionDecision, CommandPermissionRequest } from "../../shared/agent-protocol";
 
 type PendingPermission = CommandPermissionRequest & { socket: CommandPermissionSocket };
 type Listener = () => void;

@@ -51,6 +51,7 @@ export const NavigationRail: React.FC = () => {
   const store = useWorkspaceStore(useShallow((state) => ({
     openTab: state.openTab,
     gitStatus: state.gitStatus,
+    statusByRepositoryId: state.statusByRepositoryId,
     metricsTodayTotal: state.metricsTodayTotal,
     toggleDrawerView: state.toggleDrawerView,
   })));

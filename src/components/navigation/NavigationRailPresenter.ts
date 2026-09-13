@@ -6,7 +6,7 @@ import { formatCompactTokenCount } from "../../services/tokenFormat";
 
 export type NavigationRailStoreState = Pick<
   WorkspaceState,
-  "openTab" | "gitStatus" | "metricsTodayTotal" | "toggleDrawerView"
+  "openTab" | "gitStatus" | "statusByRepositoryId" | "metricsTodayTotal" | "toggleDrawerView"
 >;
 
 export interface NavigationRailIconItem {
@@ -40,6 +40,18 @@ export const NAVIGATION_RAIL_ICONS: NavigationRailIconItem[] = [
     label: "Source Control",
     icon: GitBranch,
     badgeCount: (store) => {
+      // Sums across every repository whose status has actually been loaded
+      // into statusByRepositoryId (REFACTOR_PLAN.md PR 5b commit 20) --
+      // covers submodules/worktrees the deprecated single-slot gitStatus
+      // never could. Falls back to gitStatus only when nothing has been
+      // mirrored into statusByRepositoryId yet (e.g. immediately at
+      // startup, before discoverRepositories/loadGitStatus have both run),
+      // so the badge doesn't regress to 0 during that brief window.
+      const perRepositoryTotal = Object.values(store.statusByRepositoryId ?? {}).reduce(
+        (sum, status) => sum + status.staged.length + status.unstaged.length,
+        0,
+      );
+      if (perRepositoryTotal > 0) return perRepositoryTotal;
       return store.gitStatus ? store.gitStatus.staged.length + store.gitStatus.unstaged.length : 0;
     },
     onClick: (store) => {

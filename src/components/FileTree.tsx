@@ -25,6 +25,7 @@ import { CreateDialog } from "./CreateDialog";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { gitPresenter } from "./git/GitPresenter";
+import { resolveRepositoryForPath } from "./git/resolveRepositoryForPath";
 
 import { fileTreePresenter, refreshTree } from "./filetree/FileTreePresenter";
 
@@ -326,20 +327,27 @@ export const FileTree: React.FC<FileTreeProps> = ({ entries }) => {
   };
 
   const handleAddToGit = async (node: any) => {
-    const rootPath = useWorkspaceStore.getState().rootPath;
-    if (!rootPath) return;
+    const state = useWorkspaceStore.getState();
+    // Resolves the file's own repository (REFACTOR_PLAN.md PR 5b commit 20)
+    // instead of always staging against the workspace root -- staging a
+    // file that lives inside a submodule against the wrong repository would
+    // either no-op or, worse, silently stage the submodule's own gitlink
+    // path instead of the file the user actually clicked.
+    const targetRepo = resolveRepositoryForPath(node.path, state.repositories)?.worktreePath ?? state.rootPath;
+    if (!targetRepo) return;
     try {
-      await gitPresenter.stageFile(rootPath, node.path);
+      await gitPresenter.stageFile(targetRepo, node.path);
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleAddToGitignore = async (node: any) => {
-    const rootPath = useWorkspaceStore.getState().rootPath;
-    if (!rootPath) return;
+    const state = useWorkspaceStore.getState();
+    const targetRepo = resolveRepositoryForPath(node.path, state.repositories)?.worktreePath ?? state.rootPath;
+    if (!targetRepo) return;
     try {
-      await gitPresenter.addToGitignore(rootPath, node.path);
+      await gitPresenter.addToGitignore(targetRepo, node.path);
     } catch (err) {
       console.error(err);
     }
@@ -561,6 +569,8 @@ const FileTreeNode: React.FC<{
 }> = ({ node, onContextMenu, renamingPath, onRenameComplete, onCreateRequest, selectedPaths, focusedPath, onEntryClick, onDragSelection, onMovePaths }) => {
   const expandedPaths = useWorkspaceStore((state) => state.expandedPaths);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  const statusByRepositoryId = useWorkspaceStore((state) => state.statusByRepositoryId);
   const activeTabId = useWorkspaceStore(selectActiveTabId);
 
   const [tempName, setTempName] = useState(node.name);
@@ -571,7 +581,21 @@ const FileTreeNode: React.FC<{
   const isOpen = !!expandedPaths[node.path];
   const isSelected = selectedPaths.has(node.path);
   const isFocused = focusedPath === node.path;
-  const gitState = getGitState(node, gitStatus);
+  // Resolves this node's owning repository (REFACTOR_PLAN.md PR 5b commit
+  // 20) so a submodule's own files get their submodule's status, not the
+  // workspace root's. Only actually switches away from the deprecated
+  // single-slot gitStatus for a non-"workspace" repository (a submodule or
+  // linked worktree) -- for every ordinary node (the overwhelming common
+  // case, and the only one before this PR) this is exactly the same value
+  // gitStatus already held, so nothing regresses while
+  // statusByRepositoryId is still being populated lazily (see
+  // loadGitStatus's mirroring comment in createGitSlice.ts).
+  const resolvedRepo = resolveRepositoryForPath(node.path, repositories);
+  const nodeGitStatus =
+    resolvedRepo && resolvedRepo.kind !== "workspace"
+      ? statusByRepositoryId[resolvedRepo.id] ?? null
+      : gitStatus;
+  const gitState = getGitState(node, nodeGitStatus);
   const isActiveFile = activeTabId === fileTabIdentity(node.path);
 
   useEffect(() => {

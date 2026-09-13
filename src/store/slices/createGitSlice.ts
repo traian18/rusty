@@ -67,7 +67,26 @@ export const createGitSlice: WorkspaceSliceCreator = (set, get) => ({
     }
     try {
       const result: any = await invoke("git_status", { rootDir: rootPath });
-      set({ gitStatus: mapGitStatusResult(result) });
+      const status = mapGitStatusResult(result);
+      set((state) => {
+        // Opportunistically mirrors into the new per-repository bucket too
+        // (REFACTOR_PLAN.md PR 5b commit 20), so consumers that have moved
+        // onto statusByRepositoryId (NavigationRailPresenter's badge,
+        // FileTree's markers) see real data as soon as *anything* still
+        // calls this deprecated loader -- without this, statusByRepositoryId
+        // would stay empty until every caller migrates to
+        // loadRepositoryGitStatus, which hasn't happened yet. Only mirrors
+        // when repositories has already resolved a match; silently a no-op
+        // otherwise (e.g. right at startup, before discoverRepositories has
+        // run) rather than guessing which repository this status belongs to.
+        const matchingRepo = state.repositories.find((repo) => repo.worktreePath === rootPath);
+        return {
+          gitStatus: status,
+          statusByRepositoryId: matchingRepo
+            ? { ...state.statusByRepositoryId, [matchingRepo.id]: status }
+            : state.statusByRepositoryId,
+        };
+      });
     } catch (error) {
       console.error("Failed to load git status:", error);
     }

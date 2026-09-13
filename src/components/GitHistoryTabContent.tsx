@@ -34,6 +34,27 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
   const repoPath = tab?.repoPath ?? rootPath;
   const loadGitStatus = useWorkspaceStore((state) => state.loadGitStatus);
   const gitStatus = useWorkspaceStore((state) => state.gitStatus);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  // Real HEAD state for this tab's own repository (REFACTOR_PLAN.md PR 5b
+  // commit 18), replacing the `gitStatus?.currentBranch || "detached"`
+  // guess -- gitStatus is the deprecated single-slot shim, always scoped to
+  // the workspace root, so it was silently wrong for any subproject tab.
+  // Falls back to that same guess only if repositories hasn't been
+  // discovered yet (e.g. this tab opened before SourceControl ever
+  // mounted) -- full cross-refresh guarantees land in commit 24.
+  const repository = repositories.find((repo) => repo.worktreePath === repoPath) ?? null;
+  const currentBranchName = repository
+    ? repository.head.mode === "branch"
+      ? repository.head.branch
+      : null
+    : gitStatus?.currentBranch ?? null;
+  const headBadgeLabel = repository
+    ? repository.head.mode === "branch"
+      ? repository.head.branch ?? "unknown"
+      : repository.head.mode === "detached"
+        ? `detached @ ${repository.head.oid?.slice(0, 7) ?? "?"}`
+        : "unborn"
+    : gitStatus?.currentBranch || "detached";
 
   const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +81,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       setLoadingFiles(true);
       try {
         const files: any[] = await invoke("git_get_commit_files", {
-          rootDir: rootPath,
+          rootDir: repoPath,
           commitHash,
         });
         setCommitFiles(files);
@@ -92,7 +113,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       if (!confirmRevert) return;
 
       console.log(`Git Graph: Reverting commit ${commitHash}`);
-      await invoke("git_revert_commit", { rootDir: rootPath, commitHash });
+      await invoke("git_revert_commit", { rootDir: repoPath, commitHash });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -114,7 +135,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       if (!confirmReset) return;
 
       console.log(`Git Graph: Resetting branch to ${commitHash}`);
-      await invoke("git_reset_to_commit", { rootDir: rootPath, commitHash });
+      await invoke("git_reset_to_commit", { rootDir: repoPath, commitHash });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -158,16 +179,16 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
   // Handle manual refresh
   const handleRefresh = async () => {
     await fetchCommitHistory();
-    await loadGitStatus();
+    await loadGitStatus(repoPath);
   };
 
   // Push changes to remote tracking branch
   const handlePush = async () => {
-    if (!rootPath || !gitStatus?.currentBranch || isPushing) return;
+    if (!repoPath || !currentBranchName || isPushing) return;
     setIsPushing(true);
     try {
-      console.log(`Git Graph: Pushing branch "${gitStatus.currentBranch}"...`);
-      await invoke("git_push", { rootDir: rootPath, branchName: gitStatus.currentBranch });
+      console.log(`Git Graph: Pushing branch "${currentBranchName}"...`);
+      await invoke("git_push", { rootDir: repoPath, branchName: currentBranchName });
       await handleRefresh();
       notify("Push complete", "Successfully pushed commits to remote upstream.", "success");
     } catch (err: any) {
@@ -180,11 +201,11 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
 
   // Pull changes from remote upstream
   const handlePull = async () => {
-    if (!rootPath || isPulling) return;
+    if (!repoPath || isPulling) return;
     setIsPulling(true);
     try {
       console.log("Git Graph: Pulling remote modifications...");
-      await invoke("git_pull", { rootDir: rootPath });
+      await invoke("git_pull", { rootDir: repoPath });
       await handleRefresh();
       // Reload workspace directory tree structure
       const tree: any[] = await invoke("get_directory_structure", { rootDir: rootPath });
@@ -248,7 +269,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
               {isFileHistory ? `History: ${fileBasename}` : "Git Commit History"}
             </h2>
             <span className="bg-[var(--accent-bg)] text-[var(--accent-color)] text-[10px] px-2 py-0.5 rounded font-mono font-bold border border-[var(--accent-color)]/25">
-              {gitStatus?.currentBranch || "detached"}
+              {headBadgeLabel}
             </span>
           </div>
           <p className="text-[10px] text-[var(--text-muted)] font-mono truncate max-w-lg">
@@ -530,7 +551,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
                                 deleted: "D",
                                 modified: "M",
                               };
-                              const relativePath = file.path.replace(rootPath, "").replace(/^\//, "");
+                              const relativePath = file.path.replace(repoPath, "").replace(/^\//, "");
 
                               return (
                                 <div

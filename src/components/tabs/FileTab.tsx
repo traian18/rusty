@@ -15,6 +15,7 @@ import { InlineChat } from "../inline-chat/InlineChat";
 import { InlineChatEditorContext } from "../../services/inlineChatService";
 import { createMonacoEditorOptions } from "../../editor/monacoOptions";
 import { resolveRepositoryForPath } from "../git/resolveRepositoryForPath";
+import { UnsupportedFilePreview, formatFileSize } from "./UnsupportedFilePreview";
 
 const LSP_EDITOR_ENABLED = false;
 const DEFINITION_MENU_WIDTH = 360;
@@ -64,6 +65,15 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   // extensionless script is the only case that can happen for, so this
   // stays null for every other file.
   const [shebangLanguage, setShebangLanguage] = useState<string | null>(null);
+  // check_file_open_safety's verdict for this tab's file (REFACTOR_PLAN.md
+  // PR 6 commit 8). "safe" is the default so a file already loaded before
+  // this check runs (or one the check errored on -- see the effect below)
+  // renders exactly like it did before this feature existed.
+  const [fileSafety, setFileSafety] = useState<
+    { kind: "safe" } | { kind: "binary"; sizeBytes: number } | { kind: "too_large"; sizeBytes: number }
+  >({ kind: "safe" });
+  // "Load anyway" override for a too_large file, reset per tab.path change.
+  const [forceEditableLargeFile, setForceEditableLargeFile] = useState(false);
   const [inlineChat, setInlineChat] = useState<{
     context: InlineChatEditorContext;
     position: { x: number; y: number };
@@ -133,7 +143,37 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   // Load content on mount
   useEffect(() => {
     setShebangLanguage(null);
+    setFileSafety({ kind: "safe" });
+    setForceEditableLargeFile(false);
+
     const fetchFileContent = async () => {
+      // check_file_open_safety (REFACTOR_PLAN.md PR 6 commit 8): a cheap
+      // stat + sniff, no full read, so it's safe to call unconditionally
+      // before every open. Reads the threshold fresh via getState() rather
+      // than subscribing to it, so changing the Settings preference
+      // elsewhere doesn't re-run this whole effect (which disposes and
+      // reloads the Monaco model in its cleanup below) for every open tab.
+      let safety: { kind: "safe" } | { kind: "binary"; sizeBytes: number } | { kind: "too_large"; sizeBytes: number } = {
+        kind: "safe",
+      };
+      try {
+        const thresholdBytes = useWorkspaceStore.getState().editorFileSafety.largeFileThresholdBytes;
+        const raw: any = await invoke("check_file_open_safety", { path: tab.path, maxBytes: thresholdBytes });
+        safety = raw.kind === "safe" ? { kind: "safe" } : { kind: raw.kind, sizeBytes: raw.size_bytes };
+      } catch (err) {
+        // A file the safety check can't stat (e.g. a brand-new file that
+        // only exists in the VFS cache, not yet written to disk) falls
+        // back to "safe" -- the existing VFS read below already has its
+        // own error handling for a genuinely missing file.
+        console.warn("check_file_open_safety failed, proceeding as safe:", err);
+      }
+      setFileSafety(safety);
+
+      if (safety.kind === "binary") {
+        setLoading(false);
+        return;
+      }
+
       try {
         console.log(`FileTab reading VFS path: ${tab.path}`);
         const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.path);
@@ -446,7 +486,11 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       });
     }
 
-    if (LSP_EDITOR_ENABLED) {
+    // A too_large file (REFACTOR_PLAN.md PR 6 commit 8) skips the LSP
+    // binding even once LSP_EDITOR_ENABLED is on -- no point paying for
+    // language-server sync on a file the user can't edit anyway without
+    // explicitly opting in via "Load anyway".
+    if (LSP_EDITOR_ENABLED && !(fileSafety.kind === "too_large" && !forceEditableLargeFile)) {
       // Attach LSP intelligence: registers Monaco providers for the file's
       // language, syncs the document with the language server, maps diagnostics
       // to markers, and installs the global openCodeEditor override that turns
@@ -485,6 +529,10 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
         <span>Loading file content...</span>
       </div>
     );
+  }
+
+  if (fileSafety.kind === "binary") {
+    return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={fileSafety.sizeBytes} />;
   }
 
   return (
@@ -632,6 +680,21 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
         />
       )}
 
+      {fileSafety.kind === "too_large" && !forceEditableLargeFile && (
+        <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 px-4 py-2 bg-[var(--color-status-warning-bg)] border-b border-[var(--color-status-warning-border)] text-[var(--color-status-warning)] font-mono text-[11px]">
+          <span>
+            This file is {formatFileSize(fileSafety.sizeBytes)}, above the large-file threshold -- opened read-only.
+          </span>
+          <button
+            type="button"
+            onClick={() => setForceEditableLargeFile(true)}
+            className="flex-shrink-0 px-2 py-1 rounded border border-[var(--color-status-warning-border)] hover:bg-[var(--color-status-warning-bg)]/60 cursor-pointer"
+          >
+            Load anyway (editable)
+          </button>
+        </div>
+      )}
+
       {isMarkdown && markdownPreview ? (
         <div className="h-full overflow-auto px-6 py-5 pr-24 scrollbar-wider">
           <MarkdownRenderer content={fileContent} className="max-w-4xl mx-auto" />
@@ -649,6 +712,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
           options={createMonacoEditorOptions(editorFontSize, {
             minimap: { enabled: true },
             scrollBeyondLastLine: false,
+            readOnly: fileSafety.kind === "too_large" && !forceEditableLargeFile,
             lineNumbers: (num: number) => {
               if (showBlame && blameData[num]) {
                 const blame = blameData[num];

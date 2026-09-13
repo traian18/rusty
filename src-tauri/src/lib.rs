@@ -746,7 +746,10 @@ struct ScoredSearchMatch {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FileOpenSafety {
     Safe,
-    Binary,
+    // Carries size_bytes too (not just TooLarge) so the frontend's
+    // unsupported-file preview (PR 6 commit 8) can display a real size
+    // without a second round trip -- the stat is already done either way.
+    Binary { size_bytes: u64 },
     TooLarge { size_bytes: u64 },
 }
 
@@ -768,7 +771,7 @@ fn sniff_text_file(path: &Path, max_bytes: u64) -> std::io::Result<FileOpenSafet
     let mut buffer = [0u8; 1024];
     let bytes_read = file.read(&mut buffer)?;
     if buffer[..bytes_read].contains(&0) {
-        return Ok(FileOpenSafety::Binary);
+        return Ok(FileOpenSafety::Binary { size_bytes: metadata.len() });
     }
 
     Ok(FileOpenSafety::Safe)
@@ -827,7 +830,7 @@ mod file_open_safety_tests {
 
         let result = sniff_text_file(&path, 1024 * 1024).unwrap();
 
-        assert!(matches!(result, FileOpenSafety::Binary), "expected Binary, got {:?}", result);
+        assert!(matches!(result, FileOpenSafety::Binary { .. }), "expected Binary, got {:?}", result);
     }
 
     #[test]

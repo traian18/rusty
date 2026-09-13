@@ -130,6 +130,7 @@ export type IconKey =
   | "hcl"
   | "graphql"
   | "protobuf"
+  | "image"
   | "default";
 
 export interface LanguageRule {
@@ -242,6 +243,18 @@ const RULES: LanguageRule[] = [
   // plain JSON's tokenizer, which won't highlight `//` comments specially
   // but won't misrender otherwise. Documented, not silently wrong.
   { id: "json", iconKey: "json", extensions: ["jsonc"] },
+  // Raster/vector images (REFACTOR_PLAN.md-style follow-up: FileTab now
+  // previews these instead of handing binary bytes to Monaco). SVG gets
+  // "xml" as its Monaco id -- real, tokenizable markup -- for the rare case
+  // a caller resolves language without going through FileTab's own image
+  // branch; the raster formats get "plaintext" since there's no sensible
+  // text tokenization for them and FileTab never loads them into Monaco.
+  { id: "xml", iconKey: "image", extensions: ["svg"] },
+  {
+    id: "plaintext",
+    iconKey: "image",
+    extensions: ["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico", "avif", "tiff", "tif"],
+  },
 ];
 
 const DEFAULT_RULE: LanguageRule = { id: "plaintext", iconKey: "default" };

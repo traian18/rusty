@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useWorkspaceStore, CustomProvider } from "../../store";
 import { Cpu, Key, Globe, Plus, ShieldCheck, Save, Layers, Lock, Unlock, HelpCircle as HelpIcon, RefreshCw, GitBranch, Copy, ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -40,6 +40,42 @@ export const LlmSetupTab: React.FC = () => {
   const addCustomProvider = useWorkspaceStore((state) => state.addCustomProvider);
   const providerStatus = useWorkspaceStore((state) => state.providerStatus);
 
+  // Tab UI state from store (persists across mount/unmount)
+  const llmSetupTabUi = useWorkspaceStore((state) => state.llmSetupTabUi);
+  const setLlmSetupTabApiKey = useWorkspaceStore((state) => state.setLlmSetupTabApiKey);
+  const setLlmSetupTabBaseUrl = useWorkspaceStore((state) => state.setLlmSetupTabBaseUrl);
+  const setLlmSetupTabCatalogUrl = useWorkspaceStore((state) => state.setLlmSetupTabCatalogUrl);
+  const setLlmSetupTabApiType = useWorkspaceStore((state) => state.setLlmSetupTabApiType);
+  const setLlmSetupTabAuthType = useWorkspaceStore((state) => state.setLlmSetupTabAuthType);
+  const setLlmSetupTabShowKey = useWorkspaceStore((state) => state.setLlmSetupTabShowKey);
+  const setLlmSetupTabFetchingModels = useWorkspaceStore((state) => state.setLlmSetupTabFetchingModels);
+  const setLlmSetupTabTestingConnection = useWorkspaceStore((state) => state.setLlmSetupTabTestingConnection);
+  const setLlmSetupTabConnectionStatus = useWorkspaceStore((state) => state.setLlmSetupTabConnectionStatus);
+  const setLlmSetupTabSigningOut = useWorkspaceStore((state) => state.setLlmSetupTabSigningOut);
+
+  // Shortcut names for backward compatibility with existing code
+  const apiKey = llmSetupTabUi.apiKey;
+  const baseUrl = llmSetupTabUi.baseUrl;
+  const catalogUrl = llmSetupTabUi.catalogUrl;
+  const apiType = llmSetupTabUi.apiType;
+  const authType = llmSetupTabUi.authType;
+  const showKey = llmSetupTabUi.showKey;
+  const fetchingModels = llmSetupTabUi.fetchingModels;
+  const testingConnection = llmSetupTabUi.testingConnection;
+  const connectionStatus = llmSetupTabUi.connectionStatus;
+  const signingOut = llmSetupTabUi.signingOut;
+
+  const setApiKey = setLlmSetupTabApiKey;
+  const setBaseUrl = setLlmSetupTabBaseUrl;
+  const setCatalogUrl = setLlmSetupTabCatalogUrl;
+  const setApiType = setLlmSetupTabApiType;
+  const setAuthType = setLlmSetupTabAuthType;
+  const setShowKey = setLlmSetupTabShowKey;
+  const setFetchingModels = setLlmSetupTabFetchingModels;
+  const setTestingConnection = setLlmSetupTabTestingConnection;
+  const setConnectionStatus = setLlmSetupTabConnectionStatus;
+  const setSigningOut = setLlmSetupTabSigningOut;
+
   // Selected provider configuration state. The managed-provider predicates
   // used to be duplicated verbatim here and in ProviderList.tsx -- both now
   // import the one copy in store/providerHelpers.ts (REFACTOR_PLAN.md PR
@@ -49,22 +85,6 @@ export const LlmSetupTab: React.FC = () => {
   const isCodex = Boolean(selectedProvider && isCodexProvider(selectedProvider));
   const isClaudeCode = Boolean(selectedProvider && isClaudeCodeProvider(selectedProvider));
   const isManagedAuthProvider = Boolean(selectedProvider && isManagedAuthProviderPredicate(selectedProvider));
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [catalogUrl, setCatalogUrl] = useState("");
-  const [apiType, setApiType] = useState("openai-completions");
-  const [authType, setAuthType] = useState<NonNullable<CustomProvider["authType"]>>("bearer");
-  const [showKey, setShowKey] = useState(false);
-  const [fetchingModels, setFetchingModels] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-  // Only ever reflects a regular (non-managed) provider's last manual
-  // Fetch/Test outcome -- managed providers' badges come from the
-  // registry (providerStatus) instead, via ProviderList's managed-status
-  // props below. Not lifted into the registry: this is transient,
-  // form-local UI feedback about the CURRENT DRAFT, not shared state any
-  // other surface needs (REFACTOR_PLAN.md PR 3b).
-  const [connectionStatus, setConnectionStatus] = useState<Record<string, "connected" | "failed">>({});
-  const [signingOut, setSigningOut] = useState(false);
 
   // The selected managed provider's entry, straight from the registry
   // (REFACTOR_PLAN.md PR 3b commit 9) -- replaces three separate
@@ -79,8 +99,20 @@ export const LlmSetupTab: React.FC = () => {
   const managedVendor = isCodex ? "OpenAI" : isClaudeCode ? "Anthropic" : "GitHub";
   const managedProduct = isCodex ? "Codex" : isClaudeCode ? "Claude Code" : "Copilot";
 
-  // Sync inputs with selected provider
+  // Sync inputs with selected provider.
+  //
+  // syncedProviderIdRef is lazily initialized to the store's own persisted
+  // activeCustomProviderId (not undefined/null) so remounting this tab --
+  // which happens on every switch away and back, since inactive tabs
+  // unmount -- does NOT re-run this sync and stomp an in-progress, unsaved
+  // draft that already survived in llmSetupTabUi. The sync should only
+  // fire when the user actually switches to a *different* provider while
+  // this component stays mounted, not merely because a fresh component
+  // instance is observing an unchanged selection for the first time.
+  const syncedProviderIdRef = useRef(activeCustomProviderId);
   useEffect(() => {
+    if (syncedProviderIdRef.current === activeCustomProviderId) return;
+    syncedProviderIdRef.current = activeCustomProviderId;
     if (selectedProvider) {
       setApiKey(selectedProvider.apiKey || "");
       setBaseUrl(selectedProvider.baseUrl || "");
@@ -161,7 +193,7 @@ export const LlmSetupTab: React.FC = () => {
       if (selectableModels.length > 0 && !selectableModels.some((model) => model.id === activeModel)) {
         setActiveModel(selectableModels[0].id);
       }
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "connected" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "connected" });
       const unsupportedCount = models.length - supportedModels.length;
       notify(
         "Models refreshed",
@@ -169,7 +201,7 @@ export const LlmSetupTab: React.FC = () => {
         supportedModels.length ? "success" : "info"
       );
     } catch (err: any) {
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "failed" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "failed" });
       notify("Fetch failed", `Failed to fetch models: ${err.message}`, "error");
     } finally {
       setFetchingModels(false);
@@ -182,10 +214,10 @@ export const LlmSetupTab: React.FC = () => {
     setTestingConnection(true);
     try {
       const result = await llmIntegrationService.testConnection(provider);
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "connected" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "connected" });
       notify("Connection successful", `${provider.name} returned ${result.modelCount} models; ${result.supportedModelCount} are supported by Rusty.`, "success");
     } catch (err: any) {
-      setConnectionStatus((current) => ({ ...current, [provider.id]: "failed" }));
+      setConnectionStatus({ ...connectionStatus, [provider.id]: "failed" });
       notify("Connection failed", err.message || "Could not connect to the provider.", "error");
     } finally {
       setTestingConnection(false);

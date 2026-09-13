@@ -6,6 +6,7 @@ import { buildRetryStepList } from "../../startup/buildRetryStepList";
 import type { StartupResult, StartupState, StartupStep, StepOutcome } from "../../startup/types";
 import { STARTUP_STEPS } from "./startupSteps";
 import { startProviderCoordinator } from "./providerCoordinator";
+import { startWorkspaceFsWatch } from "./workspaceFsWatchCoordinator";
 import { AppBootstrapBoundaryView } from "./AppBootstrapBoundary.view";
 
 export type ShellBootstrapStatus = "pending" | "ready" | "failed";
@@ -98,6 +99,12 @@ function beginRun(steps: readonly StartupStep[]): Promise<StartupResult> {
       // integrations to settle. Idempotent, so Retry calling beginRun()
       // again is a no-op here.
       startProviderCoordinator();
+      // Started here for the same reason: rootPath (if restored at all)
+      // only exists in the store once secure-config's restore step has
+      // run, and the coordinator's own store subscription handles every
+      // rootPath change from here on regardless of when this particular
+      // run settled.
+      startWorkspaceFsWatch();
       return result;
     })
     .finally(() => {

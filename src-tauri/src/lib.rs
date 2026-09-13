@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod git;
+mod fs_watch;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -803,6 +804,35 @@ async fn check_file_open_safety(path: String, max_bytes: u64) -> Result<FileOpen
     sniff_text_file(&path_buf, max_bytes).map_err(|e| e.to_string())
 }
 
+/// Reads an image file straight off disk and returns it base64-encoded, for
+/// FileTab's image preview -- images are exactly the kind of binary file
+/// `check_file_open_safety` above flags as unopenable text, so they need
+/// their own read path rather than the VFS's UTF-8 `read_file_vfs`, which
+/// would either error or corrupt the bytes on anything non-text.
+///
+/// Capped well above any real image a user would preview inline (a large
+/// photo or design export still fits) but low enough that a mis-clicked
+/// multi-gigabyte file can't be base64-inflated into a webview-crashing
+/// string; still-too-large files get a plain error, same shape as every
+/// other command here.
+const MAX_IMAGE_PREVIEW_BYTES: u64 = 30 * 1024 * 1024;
+
+#[tauri::command]
+async fn read_file_as_base64(path: String) -> Result<String, String> {
+    let path_buf = PathBuf::from(&path);
+    let metadata = std::fs::metadata(&path_buf).map_err(|e| format!("File not found: {} ({})", path, e))?;
+    if metadata.len() > MAX_IMAGE_PREVIEW_BYTES {
+        return Err(format!(
+            "Image is {} bytes, over the {} byte preview limit",
+            metadata.len(),
+            MAX_IMAGE_PREVIEW_BYTES
+        ));
+    }
+    let bytes = std::fs::read(&path_buf).map_err(|e| e.to_string())?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 #[cfg(test)]
 mod file_open_safety_tests {
     use super::{sniff_text_file, FileOpenSafety};
@@ -1297,6 +1327,7 @@ pub fn run() {
         .manage(CurrentExecutingNode(Arc::new(Mutex::new(None))))
         .manage(SidecarState(Arc::new(Mutex::new(None))))
         .manage(TerminalState(Arc::new(Mutex::new(HashMap::new()))))
+        .manage(fs_watch::WorkspaceWatcherState::default())
         .setup(move |app| {
             let main_window = app
                 .get_webview_window("main")
@@ -1331,6 +1362,9 @@ pub fn run() {
             get_directory_structure,
             read_file_disk,
             check_file_open_safety,
+            read_file_as_base64,
+            fs_watch::watch_workspace,
+            fs_watch::unwatch_workspace,
             write_file_disk,
             create_file,
             create_directory,

@@ -16,6 +16,8 @@ import { InlineChatEditorContext } from "../../services/inlineChatService";
 import { createMonacoEditorOptions } from "../../editor/monacoOptions";
 import { resolveRepositoryForPath } from "../git/resolveRepositoryForPath";
 import { UnsupportedFilePreview, formatFileSize } from "./UnsupportedFilePreview";
+import { ImageFilePreview } from "./ImageFilePreview";
+import { isImageFile, getImageMimeType } from "../../services/imageFile";
 import type { TabOfType } from "../../tabs/types";
 
 const LSP_EDITOR_ENABLED = false;
@@ -79,6 +81,11 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
     context: InlineChatEditorContext;
     position: { x: number; y: number };
   } | null>(null);
+  // Populated instead of fileContent/fileSafety when isImage is true --
+  // read_file_as_base64 handles binary bytes read_file_disk/VfsRegistry
+  // can't, and images never go through Monaco's text-editing path at all.
+  const [imagePreview, setImagePreview] = useState<{ dataUrl: string; sizeBytes: number } | null>(null);
+  const [imageLoadError, setImageLoadError] = useState<string | null>(null);
   const saveTimeoutRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<any>(null);
@@ -102,6 +109,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   const fileRepoPath = resolveRepositoryForPath(tab.path, repositories)?.worktreePath ?? rootPath;
 
   const isMarkdown = getFileTypeDetails(tab.path).language === "markdown";
+  const isImage = isImageFile(tab.path);
 
   useEffect(() => {
     setMarkdownPreview(isMarkdown);
@@ -117,9 +125,11 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
     return undefined;
   }, [tab.path]);
 
-  // Load Git blame details
+  // Load Git blame details. Skipped for images: blame is a per-line
+  // annotation and images have no lines -- there is nothing for the gutter
+  // to show, so there's no reason to pay for the invoke.
   useEffect(() => {
-    if (!fileRepoPath || !tab.path) return;
+    if (!fileRepoPath || !tab.path || isImage) return;
     const fetchBlame = async () => {
       try {
         const blameLines: any[] = await invoke("git_blame", { rootDir: fileRepoPath, filePath: tab.path });
@@ -146,6 +156,35 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
     setShebangLanguage(null);
     setFileSafety({ kind: "safe" });
     setForceEditableLargeFile(false);
+    setImagePreview(null);
+    setImageLoadError(null);
+
+    const fetchImageContent = async () => {
+      // Images skip check_file_open_safety and VfsRegistry entirely: the
+      // safety check's NUL-byte sniff would just classify them "binary"
+      // anyway (SVG being the one exception, since it's real text), and
+      // VfsRegistry.readFile expects UTF-8 text, which would corrupt raw
+      // image bytes rather than error cleanly on them.
+      try {
+        const base64: string = await invoke("read_file_as_base64", { path: tab.path });
+        const mime = getImageMimeType(tab.path);
+        // atob'd length is the exact decoded byte count -- cheaper and
+        // more accurate than a second stat round trip just for the
+        // caption's file size.
+        const sizeBytes = Math.floor((base64.length * 3) / 4) - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0);
+        setImagePreview({ dataUrl: `data:${mime};base64,${base64}`, sizeBytes });
+      } catch (err: any) {
+        console.error("FileTab failed to read image:", err);
+        setImageLoadError(err?.message ? String(err.message) : "Failed to read image file");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (isImage) {
+      fetchImageContent();
+      return;
+    }
 
     const fetchFileContent = async () => {
       // check_file_open_safety (REFACTOR_PLAN.md PR 6 commit 8): a cheap
@@ -530,6 +569,26 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
         <span>Loading file content...</span>
       </div>
     );
+  }
+
+  if (isImage) {
+    if (imageLoadError) {
+      return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={0} />;
+    }
+    if (imagePreview) {
+      return (
+        <ImageFilePreview
+          path={tab.path}
+          fileName={tab.title ?? tab.path}
+          src={imagePreview.dataUrl}
+          sizeBytes={imagePreview.sizeBytes}
+        />
+      );
+    }
+    // Neither set yet and not loading -- shouldn't happen (fetchImageContent
+    // always sets one or the other before clearing `loading`), but falls
+    // through to the unsupported card rather than rendering nothing.
+    return <UnsupportedFilePreview path={tab.path} fileName={tab.title ?? tab.path} sizeBytes={0} />;
   }
 
   if (fileSafety.kind === "binary") {

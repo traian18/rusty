@@ -168,6 +168,14 @@ const ConfigLogo: React.FC<{ size: number; className?: string }> = ({ size, clas
   </svg>
 );
 
+const ImageLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} className={className} fill="none" stroke="#a855f7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" fill="#a855f7" stroke="none" />
+    <path d="M21 15l-5-5L5 21" />
+  </svg>
+);
+
 const DefaultLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} className={className} fill="none" stroke="#718096" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -272,6 +280,7 @@ const ICONS: Record<IconKey, React.FC<{ size: number; className?: string }>> = {
   hcl: HclLogo,
   graphql: GraphqlLogo,
   protobuf: ProtobufLogo,
+  image: ImageLogo,
   default: DefaultLogo,
 };
 

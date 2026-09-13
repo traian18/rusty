@@ -598,4 +598,49 @@ export interface WorkspaceState {
   pendingWorkspaceRestorePath: string | null;
   saveSecureConfig: () => Promise<void>;
   loadSecureConfig: () => Promise<void>;
+
+  // Tab-specific UI state that persists across mount/unmount cycles
+  skillsTabUi: {
+    selectedSkillId: string | null;
+    editingSkill: Partial<Skill> | null;
+    isGenerating: boolean;
+    generateError: string | null;
+    genModel: string;
+    genDescription: string;
+    showSavedModal: boolean;
+  };
+  setSkillsTabUi: (updates: Partial<this["skillsTabUi"]>) => void;
+  setSkillsTabSelectedSkillId: (id: string | null) => void;
+  setSkillsTabEditingSkill: (skill: Partial<Skill> | null) => void;
+  setSkillsTabIsGenerating: (isGenerating: boolean) => void;
+  setSkillsTabGenerateError: (error: string | null) => void;
+  setSkillsTabGenModel: (model: string) => void;
+  setSkillsTabGenDescription: (description: string) => void;
+  setSkillsTabShowSavedModal: (show: boolean) => void;
+
+  llmSetupTabUi: {
+    apiKey: string;
+    baseUrl: string;
+    catalogUrl: string;
+    apiType: string;
+    authType: "bearer" | "anthropic" | "none" | "environment";
+    showKey: boolean;
+    fetchingModels: boolean;
+    testingConnection: boolean;
+    connectionStatus: Record<string, "connected" | "failed">;
+    signingOut: boolean;
+  };
+  setLlmSetupTabUi: (updates: Partial<this["llmSetupTabUi"]>) => void;
+  setLlmSetupTabApiKey: (key: string) => void;
+  setLlmSetupTabBaseUrl: (url: string) => void;
+  setLlmSetupTabCatalogUrl: (url: string) => void;
+  setLlmSetupTabApiType: (type: string) => void;
+  setLlmSetupTabAuthType: (type: "bearer" | "anthropic" | "none" | "environment") => void;
+  setLlmSetupTabShowKey: (show: boolean) => void;
+  setLlmSetupTabFetchingModels: (fetching: boolean) => void;
+  setLlmSetupTabTestingConnection: (testing: boolean) => void;
+  setLlmSetupTabConnectionStatus: (
+    status: Record<string, "connected" | "failed">
+  ) => void;
+  setLlmSetupTabSigningOut: (signingOut: boolean) => void;
 }

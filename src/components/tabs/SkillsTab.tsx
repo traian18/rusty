@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { useWorkspaceStore, Skill } from "../../store";
 import { skillsService } from "../../services/skillsService";
 import { Cpu, Plus, Trash2, Save, Wand2, Plug } from "lucide-react";
@@ -27,22 +27,55 @@ export const SkillsTab: React.FC = () => {
   const activeCustomProviderId = useWorkspaceStore((state) => state.activeCustomProviderId);
   const providerStatus = useWorkspaceStore((state) => state.providerStatus);
   const mcpServers = useWorkspaceStore((state) => state.mcpServers);
+  const activeModel = useWorkspaceStore((state) => state.activeModel);
 
-  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
-  const [editingSkill, setEditingSkill] = useState<Partial<Skill> | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
-  // Seeded from the global activeModel at mount (a lazy initializer, not a
-  // live subscription -- this field is meant to start from a reasonable
-  // default, not track activeModel afterward) rather than "" -- an
-  // unseeded "" meant providerHasModelReference(p, "") matched nothing,
-  // so "Generate with AI" silently sent customProvider: null for any user
-  // who never happened to touch this specific picker (REFACTOR_PLAN.md PR
-  // 3c, bundled with this file's resolver migration since the new
-  // blocking behavior would otherwise fire on this common case).
-  const [genModel, setGenModel] = useState<string>(() => useWorkspaceStore.getState().activeModel);
-  const [genDescription, setGenDescription] = useState<string>("");
-  const [showSavedModal, setShowSavedModal] = useState(false);
+  // Tab UI state from store (persists across mount/unmount)
+  const skillsTabUi = useWorkspaceStore((state) => state.skillsTabUi);
+  const setSkillsTabSelectedSkillId = useWorkspaceStore(
+    (state) => state.setSkillsTabSelectedSkillId
+  );
+  const setSkillsTabEditingSkill = useWorkspaceStore(
+    (state) => state.setSkillsTabEditingSkill
+  );
+  const setSkillsTabIsGenerating = useWorkspaceStore(
+    (state) => state.setSkillsTabIsGenerating
+  );
+  const setSkillsTabGenerateError = useWorkspaceStore(
+    (state) => state.setSkillsTabGenerateError
+  );
+  const setSkillsTabGenModel = useWorkspaceStore(
+    (state) => state.setSkillsTabGenModel
+  );
+  const setSkillsTabGenDescription = useWorkspaceStore(
+    (state) => state.setSkillsTabGenDescription
+  );
+  const setSkillsTabShowSavedModal = useWorkspaceStore(
+    (state) => state.setSkillsTabShowSavedModal
+  );
+
+  // Initialize genModel on first mount if it's empty
+  useEffect(() => {
+    if (!skillsTabUi.genModel) {
+      setSkillsTabGenModel(activeModel);
+    }
+  }, []);
+
+  const selectedSkillId = skillsTabUi.selectedSkillId;
+  const editingSkill = skillsTabUi.editingSkill;
+  const isGenerating = skillsTabUi.isGenerating;
+  const generateError = skillsTabUi.generateError;
+  const genModel = skillsTabUi.genModel;
+  const genDescription = skillsTabUi.genDescription;
+  const showSavedModal = skillsTabUi.showSavedModal;
+
+  // Shortcut functions for store setters with local names
+  const setSelectedSkillId = setSkillsTabSelectedSkillId;
+  const setEditingSkill = setSkillsTabEditingSkill;
+  const setIsGenerating = setSkillsTabIsGenerating;
+  const setGenerateError = setSkillsTabGenerateError;
+  const setGenModel = setSkillsTabGenModel;
+  const setGenDescription = setSkillsTabGenDescription;
+  const setShowSavedModal = setSkillsTabShowSavedModal;
 
   const genRunRef = useRef<SkillGenerationRun | null>(null);
 
@@ -52,7 +85,20 @@ export const SkillsTab: React.FC = () => {
     ? JSON.stringify(editingSkill) !== JSON.stringify({ ...selectedSkill })
     : editingSkill !== null && !skills.some(s => s.id === editingSkill?.id);
 
+  // Tracks which skill's pristine copy editingSkill was last synced from.
+  // Lazily initialized to the store's own persisted selectedSkillId (not
+  // undefined/null) so that remounting this component -- which happens on
+  // every tab switch, since inactive tabs unmount -- does NOT re-run the
+  // sync below and stomp an in-progress, unsaved draft that already
+  // survived in skillsTabUi.editingSkill. The sync should only fire when
+  // the user actually picks a *different* skill (or a fresh one) while
+  // this component is mounted, not merely because a fresh component
+  // instance is observing an unchanged selection for the first time.
+  const syncedSkillIdRef = useRef<string | null>(selectedSkillId);
+
   useEffect(() => {
+    if (syncedSkillIdRef.current === selectedSkillId) return;
+    syncedSkillIdRef.current = selectedSkillId;
     if (selectedSkill) {
       setEditingSkill({ ...selectedSkill });
     } else {

@@ -10,8 +10,8 @@
 - [x] PR 5 — Complete Git integration, including detached HEAD and submodules
 - [x] PR 6 — Add major-language syntax highlighting and safe file handling
 - [x] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
-- [ ] All requirement-level acceptance criteria pass
-- [ ] Full frontend, sidecar, Rust, and application smoke-test suite passes
+- [ ] All requirement-level acceptance criteria pass. **Not fully true, and deliberately left unchecked** — PR 7's own "Requirement-level acceptance checklist" (below) is otherwise all met, but re-auditing PR 4's design-level checklist after this line was flagged found real, confirmed gaps still open there too: no runtime payload validation wiring, no typed reverse-RPC definitions, no transport-neutral client interface, no rejection of legacy un-enveloped messages, no contract tests between client/sidecar parsing (see PR 4's own checklist for exact evidence). None of these are silently missing — each is called out with what was checked and why it's incomplete.
+- [ ] Full frontend, sidecar, Rust, and application smoke-test suite passes. **Not fully true, same reason as PR 7's own "Final verification checklist"**: `npm run verify` (frontend + sidecar + Rust unit/fixture tests) is green on every commit across every PR, but `cargo fmt --check`/`cargo clippy` were never part of that pipeline and report real pre-existing drift (flagged as a standalone follow-up, in progress separately), and a real Tauri desktop smoke test plus Windows/Linux CI builds were never runnable in this sandboxed environment at all.
 
 ## Objective
 
@@ -435,19 +435,24 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 
 ### Checklist
 
+Re-audited directly against the code (not just prior notes) after a
+discrepancy was flagged post-PR-7 — 3 items below were actually already
+done and had simply never been checked off; the rest were verified
+still genuinely incomplete, not just assumed.
+
 - [x] Retain version negotiation and capability negotiation.
 - [x] Define a discriminated command map.
 - [x] Define a discriminated event map.
-- [ ] Validate every payload at runtime, not just the envelope. (helpers added in 4a; wiring per capability is 4b)
-- [ ] Document stable conversation, run, message, correlation, parent-agent, and sequence semantics.
+- [ ] Validate every payload at runtime, not just the envelope. **Confirmed still NOT done**: `shared/agent-protocol/validation.ts`'s generic helpers (`requireString`/`requireRecord`/`requireArray`/...) exist from 4a but have zero call sites anywhere in `src/services/` or `agent-sidecar/src/` — grepped directly. 4b never actually wired them into any of the 8 migrated capabilities; only `inlineChatService.ts` validates its payload, by hand, predating this package.
+- [ ] Document stable conversation, run, message, correlation, parent-agent, and sequence semantics. **Partially done**: `envelope.ts` types and validates `conversationId`/`runId`/`messageId`/`correlationId`/`parentAgentId`/`sequence` with short inline doc comments (e.g. commands.ts's "Routing id -- NOT the envelope runId" note, added specifically because this was already confused once) — but there is no single, cohesive semantics write-up tying them together. The fields are real and enforced; the documentation of their relationships is still scattered, not absent.
 - [x] Define terminal outcomes: completed, failed, cancelled, timed out, and disconnected.
-- [ ] Define typed reverse RPC for file reads, file writes, permissions, questions, and logs.
-- [ ] Define cancellation and reconnection behavior.
-- [ ] Define replay, ordering, duplicate, and idempotency behavior.
+- [ ] Define typed reverse RPC for file reads, file writes, permissions, questions, and logs. **Confirmed still NOT done**: `rpc.ts` only holds the shared `RpcError` class. The actual read_file/write_file/permission/question/log callbacks work (every capability service defines its own `onReadFile`/`onWriteFile`/etc.), but each does so with its own ad hoc local signature, not one shared typed reverse-RPC contract.
+- [x] Define cancellation and reconnection behavior. **Corrected: this was already done, mismarked.** Cancellation: `execute_node_stop`/`global_explore_stop`/`generate_skill_stop`/`reconciliate_edge_stop`/`reconciliate_graph_stop`/`test_build_stop`, all added in 4b. Reconnection: `agentHarnessClient.ts`'s `reconnectAttempt`/`reconnectTimer` with exponential backoff (`Math.min(10_000, 250 * 2 ** (attempt - 1))`), a capped `maxReconnectAttempts`, and a `"reconnecting"` connection state — confirmed directly, this was already built in 4a and never checked off.
+- [x] Define replay, ordering, duplicate, and idempotency behavior. **Corrected: this was already done, mismarked.** `envelope.ts` carries a validated `sequence` field; `agentHarnessClient.ts` tracks `incomingSequences`/`outgoingSequences` per run, drops an already-seen sequence (`if (parsed.value.sequence <= previous) return`), detects gaps (`client.sequence_gap` diagnostic), and exposes `replayRun(workspaceRoot, runId, afterSequence)` for catching up after a reconnect. Confirmed directly, this was already built and never checked off.
 - [x] Define stable structured error codes.
-- [ ] Implement the transport-neutral client interface.
-- [ ] Keep integration HTTP calls behind a separate replaceable control-plane interface.
-- [ ] Keep LSP on its own protocol and transport boundary.
+- [ ] Implement the transport-neutral client interface. **Confirmed still NOT done**: grepped for `AgentTransport` (the interface this section's own "Transport boundary" sketch names) across `src/` — zero results. `AgentHarnessClient` owns a raw `WebSocket` directly (`private socket?: WebSocket`); `createWebSocket` is only a test-injection seam, not a consumer-facing abstraction. Swapping transports today means editing this class, not adding an adapter.
+- [ ] Keep integration HTTP calls behind a separate replaceable control-plane interface. **Partially done**: `llmIntegrationService.ts` already centralizes every LLM-provider HTTP call behind one `request<T>()`/`post()` helper, in its own module, on its own base URL (`SIDECAR_HTTP_URL`, distinct from the agent WebSocket's `SIDECAR_WS_URL`) — the *separation* this item wants already exists. What's missing is a named, swappable *interface* (no `ControlPlaneClient` type or adapter pattern) — today it's one concrete module, not a formal abstraction boundary.
+- [x] Keep LSP on its own protocol and transport boundary. **Corrected: this was already done, mismarked.** `lspService.ts` owns its own `WebSocket` against a distinct sidecar path (`${SIDECAR_WS_URL}/lsp?language=...`) and never imports anything from `shared/agent-protocol` — confirmed directly, fully independent of the agent harness protocol.
 
 ### Consumer migration checklist
 
@@ -466,9 +471,9 @@ The current WebSocket implementation becomes one adapter. A future replacement f
 
 - [x] Remove component-owned agent WebSockets. (all 9 capability consumers now go through typed services backed by the one shared `agentHarnessClient` connection)
 - [x] Delete `createAgentHarnessSocket` after the final consumer migrates. (grep-confirmed zero remaining call sites first)
-- [ ] Reject legacy un-enveloped messages at the main protocol boundary. (out of scope for 4a/4b — `parseAgentMessage`'s `"legacy"` kind is still accepted; not touched)
-- [ ] Keep legacy support only in an explicit compatibility adapter if it is still required.
-- [ ] Add contract tests that run against both client and sidecar parsing. (each 4b commit added targeted unit/live-protocol verification for the capability it touched, not a single formal contract-test suite comparing client and sidecar parsing side by side)
+- [ ] Reject legacy un-enveloped messages at the main protocol boundary. **Confirmed still NOT done** (re-verified directly, not just re-asserted): `envelope.ts`'s `parseAgentMessage` still returns `{ kind: "legacy", value }` rather than rejecting it, and both consumers accept that kind rather than reject it -- `agent-sidecar/src/server.ts` logs a warning and proceeds normally; `agentHarnessClient.ts` unwraps it the same as a modern envelope, just without sequence tracking. Out of scope for 4a/4b, as originally noted.
+- [ ] Keep legacy support only in an explicit compatibility adapter if it is still required. **Confirmed still NOT done**: legacy handling is scattered across three files (`envelope.ts`'s parser, `server.ts`'s warn-and-continue branch, `agentHarnessClient.ts`'s unwrap fallback) rather than isolated into one clearly-named adapter module.
+- [ ] Add contract tests that run against both client and sidecar parsing. **Confirmed still NOT done**: the closest existing tests (`agent-sidecar/src/services/agentProtocol.test.ts`, `src/services/agentProtocolEvents.test.ts`) both import the *same* shared `parseAgentMessage` from `shared/agent-protocol` — client and sidecar don't have separate parsing implementations to cross-check, and no test builds a message on one side to assert the other side's actual runtime handling (`server.ts`/`agentHarnessClient.ts`) accepts it correctly. Each 4b commit still only added targeted unit/live-protocol verification for the capability it touched.
 
 ### Completion criteria
 

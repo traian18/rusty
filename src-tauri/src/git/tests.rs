@@ -474,3 +474,74 @@ async fn discover_submodules_cannot_see_a_nested_submodule_of_an_uninitialized_o
     assert_eq!(submodules[0].submodule_path.as_deref(), Some("outer-sub"));
     assert!(!submodules[0].initialized);
 }
+
+// ── PR 5a commit 7: -z status parsing rewrite ────────────────────────────
+
+#[tokio::test]
+async fn git_status_reports_a_filename_with_spaces_and_unicode() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+    // Both a space and a non-ASCII byte in one name -- the exact
+    // combination that old plain --porcelain (no -z) would have partly
+    // mishandled (unicode bytes come back octal-escaped and wrapped in
+    // quotes without -z; verified directly this does NOT happen with -z).
+    fx.write("héllo world.txt", "hi\n");
+
+    let result = git_status(fx.path_str()).await.unwrap();
+
+    assert_eq!(result.unstaged.len(), 1);
+    assert_eq!(result.unstaged[0].status_type, "untracked");
+    assert_eq!(result.unstaged[0].name, "héllo world.txt");
+    assert!(result.unstaged[0].path.ends_with("héllo world.txt"));
+}
+
+#[tokio::test]
+async fn git_status_reports_a_staged_rename_with_the_new_path_not_the_arrow_string() {
+    let fx = GitFixture::init();
+    fx.commit_file("old.txt", "one\n", "initial commit");
+    fx.git_ok(&["mv", "old.txt", "new.txt"]);
+
+    let result = git_status(fx.path_str()).await.unwrap();
+
+    assert_eq!(result.staged.len(), 1);
+    assert_eq!(result.staged[0].status_type, "renamed");
+    // Before this commit, plain --porcelain (no -z) would have stored the
+    // literal string "old.txt -> new.txt" (arrow included) as the path.
+    assert_eq!(result.staged[0].name, "new.txt");
+    assert!(result.staged[0].path.ends_with("new.txt"));
+    assert!(!result.staged[0].path.contains("->"));
+}
+
+#[test]
+fn parse_status_z_reads_a_copy_records_new_path_not_its_extra_old_path_field() {
+    // git's own copy detection is config/heuristic-gated and did not
+    // reproduce through a real fixture even with status.renames=copies set
+    // (verified directly) -- exercised here as a pure parser unit test
+    // against the exact byte format the porcelain=v1 -z spec documents for
+    // an R/C record (NEW path first, then one extra NUL-terminated field
+    // for the OLD path) instead.
+    let root = std::path::Path::new("/repo");
+    let raw = "C  new-copy.txt\0source.txt\0";
+
+    let (staged, unstaged) = parse_status_z(raw, root);
+
+    assert_eq!(unstaged.len(), 0);
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].status_type, "copied");
+    assert_eq!(staged[0].name, "new-copy.txt");
+    assert_eq!(staged[0].path, "/repo/new-copy.txt");
+}
+
+#[test]
+fn parse_status_z_does_not_let_a_renames_extra_field_bleed_into_the_next_record() {
+    let root = std::path::Path::new("/repo");
+    let raw = "R  new.txt\0old.txt\0?? untracked.txt\0";
+
+    let (staged, unstaged) = parse_status_z(raw, root);
+
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].name, "new.txt");
+    assert_eq!(unstaged.len(), 1);
+    assert_eq!(unstaged[0].name, "untracked.txt");
+    assert_eq!(unstaged[0].status_type, "untracked");
+}

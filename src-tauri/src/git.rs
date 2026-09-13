@@ -279,9 +279,18 @@ pub async fn git_status(root_dir: String) -> Result<GitStatusResult, GitError> {
         }
     }
 
-    // 2. Query porcelain output to easily parse staged, unstaged, and untracked changes
+    // 2. Query NUL-delimited porcelain output to parse staged, unstaged, and
+    // untracked changes. `-z` guarantees raw, unescaped, unquoted UTF-8
+    // paths -- no octal-escaping of unicode bytes, no `"quoted"` wrapping
+    // for paths containing spaces, verified directly against git 2.45.0's
+    // actual byte output rather than assumed from documentation. A rename
+    // or copy record (X or Y == 'R'/'C') is followed by one EXTRA
+    // NUL-terminated field carrying the file's OLD path -- also verified
+    // directly. Before this, plain `--porcelain` (no `-z`) mis-parsed a
+    // rename entirely: `R  old -> new` was sliced at a fixed offset and the
+    // whole `"old -> new"` string, arrow included, was stored as one path.
     let status_output = Command::new("git")
-        .args(&["status", "--porcelain", "-u"])
+        .args(&["status", "--porcelain=v1", "-u", "-z"])
         .current_dir(&root_dir)
         .output()
         .map_err(|e| GitError {
@@ -292,31 +301,55 @@ pub async fn git_status(root_dir: String) -> Result<GitStatusResult, GitError> {
             message: format!("Failed to run git: {e}"),
         })?;
 
-    let output_str = String::from_utf8_lossy(&status_output.stdout);
+    let raw = String::from_utf8_lossy(&status_output.stdout).into_owned();
+    let (staged, unstaged) = parse_status_z(&raw, root_path);
+
+    Ok(GitStatusResult {
+        is_repo: true,
+        current_branch,
+        staged,
+        unstaged,
+    })
+}
+
+/// Parses `git status --porcelain=v1 -u -z`'s raw NUL-delimited stdout into
+/// (staged, unstaged) file lists. A pure function so the record format
+/// (including the rename/copy extra-field case, which is straightforward
+/// to get wrong and awkward to reliably trigger through git's own
+/// heuristics in a hermetic fixture -- copy detection in particular is
+/// config/heuristic-gated and did not reproduce even with
+/// `status.renames=copies` set, verified directly) is unit-testable
+/// against hand-built byte sequences, not just real git fixtures.
+fn parse_status_z(raw: &str, root_path: &Path) -> (Vec<GitFileStatus>, Vec<GitFileStatus>) {
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
 
-    for line in output_str.lines() {
-        if line.len() < 4 {
+    let mut fields = raw.split('\0').filter(|f| !f.is_empty());
+    while let Some(record) = fields.next() {
+        if record.len() < 4 {
             continue;
         }
-        
+
         // Extract status characters X and Y
         // X represents index status, Y represents working tree status
-        let x = line.chars().nth(0).unwrap_or(' ');
-        let y = line.chars().nth(1).unwrap_or(' ');
-        let relative_path = &line[3..];
-        
-        // Clean quotes from files with spaces or non-ascii names
-        let clean_path = relative_path.trim_matches('"').to_string();
-        
-        let file_name = Path::new(&clean_path)
+        let x = record.chars().next().unwrap_or(' ');
+        let y = record.chars().nth(1).unwrap_or(' ');
+        let path = record[3..].to_string();
+
+        // GitFileStatus doesn't track "renamed from" today -- this field
+        // must still be consumed so the next record isn't misread as this
+        // one's continuation.
+        if x == 'R' || x == 'C' {
+            fields.next();
+        }
+
+        let file_name = Path::new(&path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&clean_path)
+            .unwrap_or(&path)
             .to_string();
 
-        let abs_path = root_path.join(&clean_path).to_string_lossy().into_owned();
+        let abs_path = root_path.join(&path).to_string_lossy().into_owned();
 
         if x == '?' && y == '?' {
             // "??" indicates an untracked file
@@ -325,46 +358,43 @@ pub async fn git_status(root_dir: String) -> Result<GitStatusResult, GitError> {
                 name: file_name,
                 status_type: "untracked".into(),
             });
-        } else {
-            // Process staged changes (X represents the index state)
-            if x != ' ' {
-                let status_type = match x {
-                    'M' => "modified",
-                    'A' => "added",
-                    'D' => "deleted",
-                    'R' => "renamed",
-                    _ => "modified",
-                };
-                staged.push(GitFileStatus {
-                    path: abs_path.clone(),
-                    name: file_name.clone(),
-                    status_type: status_type.into(),
-                });
-            }
-            
-            // Process unstaged changes (Y represents the working tree state)
-            if y != ' ' {
-                let status_type = match y {
-                    'M' => "modified",
-                    'D' => "deleted",
-                    'A' => "added",
-                    _ => "modified",
-                };
-                unstaged.push(GitFileStatus {
-                    path: abs_path,
-                    name: file_name,
-                    status_type: status_type.into(),
-                });
-            }
+            continue;
+        }
+
+        // Process staged changes (X represents the index state)
+        if x != ' ' {
+            let status_type = match x {
+                'M' => "modified",
+                'A' => "added",
+                'D' => "deleted",
+                'R' => "renamed",
+                'C' => "copied",
+                _ => "modified",
+            };
+            staged.push(GitFileStatus {
+                path: abs_path.clone(),
+                name: file_name.clone(),
+                status_type: status_type.into(),
+            });
+        }
+
+        // Process unstaged changes (Y represents the working tree state)
+        if y != ' ' {
+            let status_type = match y {
+                'M' => "modified",
+                'D' => "deleted",
+                'A' => "added",
+                _ => "modified",
+            };
+            unstaged.push(GitFileStatus {
+                path: abs_path,
+                name: file_name,
+                status_type: status_type.into(),
+            });
         }
     }
 
-    Ok(GitStatusResult {
-        is_repo: true,
-        current_branch,
-        staged,
-        unstaged,
-    })
+    (staged, unstaged)
 }
 
 /// Initializes a new Git repository in the specified directory path.

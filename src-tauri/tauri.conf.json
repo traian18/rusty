@@ -35,7 +35,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["bin/node"],
     "resources": ["resources/sidecar"],
     "macOS": {
       "signingIdentity": "Developer ID Application: Suciu Victor Traian (XH3PAKPS6T)",

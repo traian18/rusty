@@ -1,0 +1,91 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: # allow manual runs without tagging
+
+permissions:
+  contents: write # needed for `gh release create`
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04 # older glibc = broader compatibility for the AppImage/deb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      # webkit2gtk + friends for the Tauri build; rpm/patchelf for the rpm bundler.
+      - name: Install system libraries
+        run: |
+          sudo apt update
+          sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev rpm
+
+      - name: Install dependencies
+        run: |
+          npm install
+          npm --prefix agent-sidecar install
+
+      # externalBin in tauri.conf.json is "bin/rusty-node"; Tauri appends the target
+      # triple, resolving to bin/rusty-node-x86_64-unknown-linux-gnu. The dir is
+      # gitignored and absent on a fresh checkout, so fetch it here.
+      - name: Download bundled Node runtime
+        run: |
+          mkdir -p src-tauri/bin # gitignored; doesn't exist on a fresh checkout
+          cd src-tauri/bin
+          curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-x64.tar.xz
+          tar xf node-v22.23.1-linux-x64.tar.xz
+          cp node-v22.23.1-linux-x64/bin/node rusty-node-x86_64-unknown-linux-gnu
+          chmod +x rusty-node-x86_64-unknown-linux-gnu
+          rm -rf node-v22.23.1-linux-x64*
+
+      # Only deb is built. The ~850MB bundled sidecar payload (codex musl binaries,
+      # large node_modules) makes the rpm bundler's xz pass take 30min+ and trips
+      # the AppImage bundler ("failed to run linuxdeploy") outright. deb covers
+      # Debian/Ubuntu/Mint. rpm/AppImage can be revisited once the payload is trimmed.
+      - name: Build (deb)
+        run: npm run tauri build -- --bundles deb
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist-artifacts
+          find src-tauri/target/release/bundle \
+            -name '*.deb' \
+            -exec cp {} dist-artifacts/ \;
+          ls -lh dist-artifacts
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rusty-IDE-linux-x86_64
+          path: dist-artifacts/*
+
+      # Only when triggered by a version tag — attaches installers to the release.
+      - name: Create / update GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist-artifacts/* \
+            --repo "${{ github.repository }}" \
+            --title "Rusty-IDE ${{ github.ref_name }}" \
+            --notes "Linux build (x86_64). deb." \
+            || gh release upload "${{ github.ref_name }}" dist-artifacts/* --clobber

@@ -1,0 +1,84 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: # allow manual runs without tagging
+
+permissions:
+  contents: write # needed for `gh release create`
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          npm install
+          npm --prefix agent-sidecar install
+
+      # externalBin in tauri.conf.json is "bin/node"; Tauri appends the target
+      # triple, so on Windows it resolves to bin/rusty-node-x86_64-pc-windows-msvc.exe.
+      # The dir is gitignored and absent on a fresh checkout, so fetch it here.
+      - name: Download bundled Node runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/bin | Out-Null
+          Set-Location src-tauri/bin
+          curl.exe -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-win-x64.zip
+          tar.exe xf node-v22.23.1-win-x64.zip
+          Copy-Item node-v22.23.1-win-x64/node.exe rusty-node-x86_64-pc-windows-msvc.exe
+          Remove-Item -Recurse -Force node-v22.23.1-win-x64*
+
+      # Produces both installers. No code signing — the .exe/.msi are unsigned,
+      # so users get a SmartScreen "unknown publisher" prompt on first launch.
+      - name: Build (NSIS + MSI)
+        run: npm run tauri build -- --bundles nsis,msi
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-artifacts | Out-Null
+          Get-ChildItem -Recurse -Path src-tauri/target/release/bundle `
+            -Include *.exe, *.msi |
+            ForEach-Object { Copy-Item $_.FullName dist-artifacts/ }
+          Get-ChildItem dist-artifacts
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rusty-IDE-windows-x86_64
+          path: dist-artifacts/*
+
+      # Only when triggered by a version tag — attaches installers to the release.
+      - name: Create / update GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${{ github.ref_name }}" dist-artifacts/* \
+            --repo "${{ github.repository }}" \
+            --title "Rusty-IDE ${{ github.ref_name }}" \
+            --notes "Windows build (x86_64). Unsigned NSIS installer + MSI." \
+            || gh release upload "${{ github.ref_name }}" dist-artifacts/* --clobber

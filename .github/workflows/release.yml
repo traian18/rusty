@@ -33,8 +33,8 @@ jobs:
           cd src-tauri/bin
           curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz
           tar xzf node-v22.23.1-darwin-arm64.tar.gz
-          cp node-v22.23.1-darwin-arm64/bin/node node-aarch64-apple-darwin
-          chmod +x node-aarch64-apple-darwin
+          cp node-v22.23.1-darwin-arm64/bin/node rusty-node-aarch64-apple-darwin
+          chmod +x rusty-node-aarch64-apple-darwin
           rm -rf node-v22.23.1-darwin-arm64*
 
       - name: Import Developer ID certificate

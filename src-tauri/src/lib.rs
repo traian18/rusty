@@ -1198,14 +1198,23 @@ fn spawn_sidecar(app: &tauri::App) {
         return;
     }
 
-    // Resolve the bundled Node binary declared via `externalBin` in tauri.conf.json.
-    let sidecar_cmd = match app.shell().sidecar("node") {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            eprintln!("[sidecar] failed to resolve bundled node binary: {}", e);
-            return;
-        }
-    };
+    // Resolve the bundled Node binary shipped alongside server.js as an app
+    // resource (not an `externalBin`), so it never lands on the system PATH
+    // (e.g. /usr/bin/node) and can't collide with a distro node package.
+    let node_name = if cfg!(windows) { "rusty-node.exe" } else { "rusty-node" };
+    let node_path = resource_dir
+        .join("resources")
+        .join("sidecar")
+        .join(node_name);
+    if !node_path.exists() {
+        eprintln!(
+            "[sidecar] bundled node binary not found at {}. \
+             Run `npm run build:sidecar` to stage it.",
+            node_path.display()
+        );
+        return;
+    }
+    let sidecar_cmd = app.shell().command(node_path.to_string_lossy().to_string());
 
     // Persist sidecar stdout/stderr to a log file. println!/eprintln! only reach
     // a visible console when the app is launched from a terminal - for a normal

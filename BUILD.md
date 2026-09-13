@@ -118,15 +118,15 @@ npm run tauri build -- --bundles msi
 
 ## Bundled Node.js runtime
 
-The bundled Node binary lives in `src-tauri/bin/node-<target-triple>` and is excluded from git (downloaded locally). You need the matching binary for each target platform:
+The bundled Node binary lives in `src-tauri/bin/rusty-node-<target-triple>` and is excluded from git (downloaded locally). You need the matching binary for each target platform:
 
 | Target triple | Platform | Binary name |
 |---------------|----------|-------------|
-| `aarch64-apple-darwin` | macOS Apple Silicon | `node-aarch64-apple-darwin` |
-| `x86_64-apple-darwin` | macOS Intel | `node-x86_64-apple-darwin` |
-| `x86_64-pc-windows-msvc` | Windows 64-bit | `node-x86_64-pc-windows-msvc.exe` |
-| `x86_64-unknown-linux-gnu` | Linux 64-bit (most distros) | `node-x86_64-unknown-linux-gnu` |
-| `aarch64-unknown-linux-gnu` | Linux ARM64 | `node-aarch64-unknown-linux-gnu` |
+| `aarch64-apple-darwin` | macOS Apple Silicon | `rusty-node-aarch64-apple-darwin` |
+| `x86_64-apple-darwin` | macOS Intel | `rusty-node-x86_64-apple-darwin` |
+| `x86_64-pc-windows-msvc` | Windows 64-bit | `rusty-node-x86_64-pc-windows-msvc.exe` |
+| `x86_64-unknown-linux-gnu` | Linux 64-bit (most distros) | `rusty-node-x86_64-unknown-linux-gnu` |
+| `aarch64-unknown-linux-gnu` | Linux ARM64 | `rusty-node-aarch64-unknown-linux-gnu` |
 
 ### Downloading Node binaries
 
@@ -139,16 +139,16 @@ Download from <https://nodejs.org/dist/> (use Node v22.x, e.g. v22.23.1) and ext
 cd src-tauri/bin
 curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz
 tar xzf node-v22.23.1-darwin-arm64.tar.gz
-cp node-v22.23.1-darwin-arm64/bin/node node-aarch64-apple-darwin
-chmod +x node-aarch64-apple-darwin
+cp node-v22.23.1-darwin-arm64/bin/node rusty-node-aarch64-apple-darwin
+chmod +x rusty-node-aarch64-apple-darwin
 rm -rf node-v22.23.1-darwin-arm64*
 
 # Intel Mac
 cd src-tauri/bin
 curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-x64.tar.gz
 tar xzf node-v22.23.1-darwin-x64.tar.gz
-cp node-v22.23.1-darwin-x64/bin/node node-x86_64-apple-darwin
-chmod +x node-x86_64-apple-darwin
+cp node-v22.23.1-darwin-x64/bin/node rusty-node-x86_64-apple-darwin
+chmod +x rusty-node-x86_64-apple-darwin
 rm -rf node-v22.23.1-darwin-x64*
 ```
 
@@ -158,7 +158,7 @@ rm -rf node-v22.23.1-darwin-x64*
 cd src-tauri\bin
 curl.exe -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-win-x64.zip
 tar xf node-v22.23.1-win-x64.zip
-copy node-v22.23.1-win-x64\node.exe node-x86_64-pc-windows-msvc.exe
+copy node-v22.23.1-win-x64\node.exe rusty-node-x86_64-pc-windows-msvc.exe
 Remove-Item -Recurse node-v22.23.1-win-x64*
 ```
 
@@ -169,15 +169,15 @@ Remove-Item -Recurse node-v22.23.1-win-x64*
 cd src-tauri/bin
 curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-x64.tar.xz
 tar xf node-v22.23.1-linux-x64.tar.xz
-cp node-v22.23.1-linux-x64/bin/node node-x86_64-unknown-linux-gnu
-chmod +x node-x86_64-unknown-linux-gnu
+cp node-v22.23.1-linux-x64/bin/node rusty-node-x86_64-unknown-linux-gnu
+chmod +x rusty-node-x86_64-unknown-linux-gnu
 rm -rf node-v22.23.1-linux-x64*
 
 # ARM64
 curl -LO https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-arm64.tar.xz
 tar xf node-v22.23.1-linux-arm64.tar.xz
-cp node-v22.23.1-linux-arm64/bin/node node-aarch64-unknown-linux-gnu
-chmod +x node-aarch64-unknown-linux-gnu
+cp node-v22.23.1-linux-arm64/bin/node rusty-node-aarch64-unknown-linux-gnu
+chmod +x rusty-node-aarch64-unknown-linux-gnu
 rm -rf node-v22.23.1-linux-arm64*
 ```
 
@@ -237,7 +237,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             curl -LO https://nodejs.org/dist/v20.20.2/node-v20.20.2-win-x64.zip
             tar xf node-v20.20.2-win-x64.zip
-            cp node-v20.20.2-win-x64/node.exe "node-${{ matrix.target }}.exe"
+            cp node-v20.20.2-win-x64/node.exe "rusty-node-${{ matrix.target }}.exe"
           else
             OS="linux"; EXT="tar.xz"; ARCH="x64"
             if [ "${{ runner.os }}" = "macOS" ]; then OS="darwin"; EXT="tar.gz"; fi
@@ -245,8 +245,8 @@ jobs:
             if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then ARCH="x64"; fi
             curl -LO "https://nodejs.org/dist/v20.20.2/node-v20.20.2-${OS}-${ARCH}.${EXT}"
             tar xf "node-v20.20.2-${OS}-${ARCH}.${EXT}"
-            cp "node-v20.20.2-${OS}-${ARCH}/bin/node" "node-${{ matrix.target }}"
-            chmod +x "node-${{ matrix.target }}"
+            cp "node-v20.20.2-${OS}-${ARCH}/bin/node" "rusty-node-${{ matrix.target }}"
+            chmod +x "rusty-node-${{ matrix.target }}"
           fi
           rm -rf node-v20.20.2-*
         shell: bash

@@ -2,6 +2,7 @@ import path from "path";
 import { WebSocket } from "ws";
 import { resolveHarness } from "../services/harness";
 import { request, safeSend, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createUsageReporter } from "../services/usageBroadcast";
 
 // Same rationale as globalExplore.ts/reconciliateEdge.ts: this capability's
@@ -230,6 +231,16 @@ export async function buildOverlappingFileContext(options: {
 
 export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void> {
   const { tabId, model, nodes, workspaceRoot, customProvider, duplicateFiles, fileSources, chatHistory, userMessage } = data;
+
+  try {
+    requireString(tabId, "tabId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "reconciliation_graph_error", tabId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] reconciliate_graph starting for tab: ${tabId}, userMessage: ${userMessage || "none"}`);
 
   const reconciliationStreamId = `__reconciliation__:${tabId}`;

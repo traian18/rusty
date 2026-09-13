@@ -20,6 +20,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { safeSend } from "../services/websocket";
 import { executeCommand, stopCommandsForSession } from "../services/commandExecution";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { callLlmWithToolsPiStreaming } from "../services/llmRuntime";
 import type { NormalizedCommand } from "../services/commandPermissions";
 import { createUsageReporter } from "../services/usageBroadcast";
@@ -55,6 +56,16 @@ export function stopTestBuild(tabId: string): boolean {
 
 export async function testBuild(ws: WebSocket, data: any): Promise<void> {
   const { tabId, buildCommand, workspaceRoot, reconciledFiles, model, customProvider } = data;
+
+  try {
+    requireString(tabId, "tabId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "test_build_error", nodeId: String(tabId || "unknown"), error: error.message });
+    return;
+  }
+
   const streamId = getTestBuildStreamId(tabId);
   activeTestBuilds.add(tabId);
   cancelledTestBuilds.delete(tabId);

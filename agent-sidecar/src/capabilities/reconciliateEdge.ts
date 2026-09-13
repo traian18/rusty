@@ -9,6 +9,7 @@
 import { WebSocket } from "ws";
 import path from "path";
 import { safeSend, request, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { callLlmWithToolsPiStreaming } from "../services/llmRuntime";
 import { createUsageReporter } from "../services/usageBroadcast";
@@ -30,6 +31,18 @@ export function stopEdgeReconciliation(edgeId: string): boolean {
 
 export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> {
   const { edgeId, sourceTaskId, targetTaskId, modifiedFiles, userMessage, chatHistory, workspaceRoot, model, sourcePrompt, targetPrompt, customProvider } = data;
+
+  try {
+    requireString(edgeId, "edgeId");
+    requireString(sourceTaskId, "sourceTaskId");
+    requireString(targetTaskId, "targetTaskId");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "reconciliation_error", edgeId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] reconciliate_edge starting`, { edgeId, sourceTaskId, targetTaskId });
   activeReconciliations.add(edgeId);
   cancelledReconciliations.delete(edgeId);

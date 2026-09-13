@@ -9,6 +9,7 @@
 import { WebSocket } from "ws";
 import path from "path";
 import { safeSend, getNextId, request, validateRpcResponse, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { resolveHarness } from "../services/harness";
 import { createLspTools } from "../services/lspTools";
@@ -50,6 +51,17 @@ export async function stopAgentChatDelegations(runOrTabId: string, reason?: stri
 
 export async function agentChat(ws: WebSocket, data: any): Promise<void> {
   const { tabId, message, model, workspaceRoot, chatHistory, customProvider, skill, lspSettings, mcpServers, planOnly, vfsOnly } = data;
+
+  try {
+    requireString(tabId, "tabId");
+    requireString(message, "message");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "agent_chat_error", tabId, error: error.message });
+    return;
+  }
+
   const runId = typeof data.runId === "string" && data.runId ? data.runId : getNextId();
   const conversationId = typeof data.conversationId === "string" && data.conversationId ? data.conversationId : tabId;
   const eventRecorder = new RunEventRecorder(

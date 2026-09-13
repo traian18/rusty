@@ -9,6 +9,7 @@
 import { WebSocket } from "ws";
 import path from "path";
 import { safeSend, request, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { createMcpTools, McpServerConfig } from "../services/mcpClient";
 import { createLspTools } from "../services/lspTools";
@@ -22,6 +23,18 @@ import {
 
 export async function executeNode(ws: WebSocket, data: any): Promise<void> {
   const { nodeId, instructions, model, workspaceRoot, inputFiles, customProvider, globalContext, contextDescriptions, chatHistory, skill, mcpContext, upstreamTaskContext, lspSettings } = data;
+
+  try {
+    requireString(nodeId, "nodeId");
+    requireString(instructions, "instructions");
+    requireString(model, "model");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "execution_error", nodeId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] execute_node task starting`, {
     nodeId,
     model,

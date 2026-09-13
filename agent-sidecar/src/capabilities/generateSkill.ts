@@ -9,6 +9,7 @@ import { WebSocket } from "ws";
 import { safeSend } from "../services/websocket";
 import { resolveHarness } from "../services/harness";
 import { createUsageReporter } from "../services/usageBroadcast";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 
 const AVAILABLE_TOOLS = ["read_file", "write_file", "list_files", "search_codebase", "web_search", "run_command"];
 
@@ -33,6 +34,16 @@ export function stopSkillGeneration(runId: string): boolean {
 
 export async function generateSkill(ws: WebSocket, data: any): Promise<void> {
   const { description, model, customProvider, runId } = data;
+
+  try {
+    requireString(description, "description");
+    requireString(runId, "runId");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "generate_skill_error", runId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] generate_skill starting`, { model, hasCustomProvider: !!customProvider });
   const abortController = new AbortController();
   activeSkillGenerations.set(runId, abortController);

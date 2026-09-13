@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import { safeSend } from "../services/websocket";
 import { EmptyLlmResponseError } from "../services/llmRuntime";
 import { resolveHarness } from "../services/harness";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import {
   buildTaskGenerationQuery,
   TASK_GENERATION_SYSTEM_PROMPT,
@@ -25,6 +26,15 @@ export function stopTaskNodeGeneration(requestId: string): boolean {
 
 export async function generateTaskNodes(ws: WebSocket, data: any): Promise<void> {
   const { requestId, nodeId, model, customProvider } = data;
+
+  try {
+    requireString(requestId, "requestId");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "generate_task_nodes_error", requestId, nodeId, error: error.message });
+    return;
+  }
+
   const abortController = new AbortController();
   activeTaskGenerations.set(requestId, abortController);
   try {

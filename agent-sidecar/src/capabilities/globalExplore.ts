@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import path from "path";
 import fs from "fs";
 import { safeSend, request, validateReadFileRpcResponse } from "../services/websocket";
+import { PayloadValidationError, requireString } from "../../../shared/agent-protocol";
 import { createListFilesTool, createSearchCodebaseTool, listFilesRecursive } from "../services/tools";
 import { resolveHarness } from "../services/harness";
 import { createMcpTools, McpServerConfig } from "../services/mcpClient";
@@ -35,6 +36,17 @@ export function stopGlobalExploration(nodeId: string): boolean {
 
 export async function globalExplore(ws: WebSocket, data: any): Promise<void> {
   const { nodeId, prompt, workspaceRoot, model, chatHistory, customProvider, mcpServers, planOnly } = data;
+
+  try {
+    requireString(nodeId, "nodeId");
+    requireString(prompt, "prompt");
+    requireString(workspaceRoot, "workspaceRoot");
+  } catch (error) {
+    if (!(error instanceof PayloadValidationError)) throw error;
+    safeSend(ws, { type: "global_explore_error", nodeId, error: error.message });
+    return;
+  }
+
   console.log(`WebSocket [Server] global_explore starting`, { nodeId, workspaceRoot, model, mcpCount: mcpServers?.length || 0 });
 
   const sendLog = (message: string) => {

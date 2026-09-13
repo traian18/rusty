@@ -8,7 +8,7 @@
 - [x] PR 3 — Add an extensible application startup procedure
 - [x] PR 4 — Complete the shared sidecar agent protocol migration
 - [x] PR 5 — Complete Git integration, including detached HEAD and submodules
-- [ ] PR 6 — Add major-language syntax highlighting and safe file handling
+- [x] PR 6 — Add major-language syntax highlighting and safe file handling
 - [ ] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
 - [ ] All requirement-level acceptance criteria pass
 - [ ] Full frontend, sidecar, Rust, and application smoke-test suite passes
@@ -575,45 +575,49 @@ Detached history includes the checked-out commit, empty repositories are represe
 
 ## PR 6 — Major-language file support
 
-Create one language registry used by editor language selection, file icons, file filtering, inline chat, and LSP mapping.
+Create one language registry used by editor language selection, file icons, file filtering, inline chat, and LSP mapping. **Done**, 9 commits (full detail in the PR 6 plan file): `lspLanguage.ts` and `fileTypeService.tsx`'s previously-independent icon `switch` were consolidated into one `languageRegistry.ts` table (`RULES: LanguageRule[]`, each carrying its filenames/extensions, Monaco id, icon key, and shebang interpreters together), coverage was expanded against what the installed `monaco-editor`'s `basic-languages` set actually ships, and a brand-new binary/size safety layer was added end to end (backend command, a real user preference, FileTab.tsx wiring).
 
 ### Language checklist
 
-- [ ] TypeScript, JavaScript, JSX, and TSX.
-- [ ] HTML, CSS, Sass, and Less.
-- [ ] JSON, JSONC, YAML, XML, TOML, and INI.
-- [ ] Markdown and MDX.
-- [ ] Python.
-- [ ] Java, Kotlin, and Scala.
-- [ ] C, C++, and Objective-C.
-- [ ] C# and F#.
-- [ ] Rust and Go.
-- [ ] Swift.
-- [ ] PHP, Ruby, Lua, and Dart.
-- [ ] R and SQL.
-- [ ] Shell and PowerShell.
-- [ ] Dockerfile, Makefile, and CMake.
-- [ ] Terraform and HCL.
-- [ ] GraphQL.
-- [ ] Protocol Buffers.
-- [ ] Vue and Svelte where Monaco tokenization support is available.
+- [x] TypeScript, JavaScript, JSX, and TSX.
+- [x] HTML, CSS, Sass, and Less.
+- [x] JSON, JSONC, YAML, XML, TOML, and INI. (JSONC has no distinct Monaco tokenizer in this build -- gets plain JSON's, documented at the rule; TOML has no tokenizer at all -- resolves to "plaintext", documented)
+- [x] Markdown and MDX.
+- [x] Python.
+- [x] Java, Kotlin, and Scala.
+- [x] C, C++, and Objective-C.
+- [x] C# and F#.
+- [x] Rust and Go.
+- [x] Swift.
+- [x] PHP, Ruby, Lua, and Dart.
+- [x] R and SQL.
+- [x] Shell and PowerShell. (`.ps1` was actively mis-mapped to Monaco's Windows-batch tokenizer before this PR -- fixed)
+- [x] Dockerfile, Makefile, and CMake. (Makefile/CMake have no Monaco tokenizer -- both resolve to "plaintext", documented, rather than an id Monaco doesn't recognize)
+- [x] Terraform and HCL. (Terraform has no tokenizer of its own; HCL, its underlying grammar, does and covers `.tf`/`.tfvars`)
+- [x] GraphQL.
+- [x] Protocol Buffers. (Monaco's own id for this tokenizer is "proto", not "protobuf" -- confirmed directly against the installed package)
+- [x] Vue and Svelte where Monaco tokenization support is available. (Confirmed directly: this Monaco build has no tokenizer for either -- deliberately not added as entries at all, documented at the top of `RULES`, falling through to the same "plaintext" every other unsupported extension gets)
 
 ### File handling checklist
 
-- [ ] Recognize important extensionless files such as `Dockerfile`, `Makefile`, and `Gemfile`.
-- [ ] Detect shebangs for extensionless scripts.
-- [ ] Treat unknown text files as plaintext.
-- [ ] Detect binary files before opening Monaco.
-- [ ] Show an unsupported/binary preview rather than corrupt text.
-- [ ] Add a configurable large-file threshold.
-- [ ] Open oversized text files in a safe read-only mode.
-- [ ] Preserve Markdown edit and preview modes.
-- [ ] Keep syntax highlighting independent from optional LSP support.
-- [ ] Add table-driven mapping tests for filename, extension, shebang, Monaco language, and LSP key.
+- [x] Recognize important extensionless files such as `Dockerfile`, `Makefile`, and `Gemfile`.
+- [x] Detect shebangs for extensionless scripts. (`#!/usr/bin/env X` resolves to `X`, not `env`; a trailing version number is also tried stripped; only consulted as a last resort, after every filename/extension check fails)
+- [x] Treat unknown text files as plaintext.
+- [x] Detect binary files before opening Monaco. (`check_file_open_safety`, a cheap stat + first-1KB NUL-byte sniff, called before FileTab.tsx touches the VFS at all)
+- [x] Show an unsupported/binary preview rather than corrupt text. (`UnsupportedFilePreview.tsx`)
+- [x] Add a configurable large-file threshold. (a real user preference -- `editorFileSafety.largeFileThresholdBytes`, a Settings panel, not a hardcoded constant -- asked and confirmed explicitly during planning)
+- [x] Open oversized text files in a safe read-only mode. (opens in full -- not truncated/streamed, a deliberate scope decision -- but read-only with LSP disabled and a "Load anyway" override)
+- [x] Preserve Markdown edit and preview modes. (already worked pre-PR-6; confirmed unchanged, no code needed)
+- [x] Keep syntax highlighting independent from optional LSP support. (already true pre-PR-6 -- Monaco's `language` prop was already set unconditionally regardless of `LSP_EDITOR_ENABLED`; confirmed, no code needed)
+- [x] Add table-driven mapping tests for filename, extension, shebang, Monaco language, and LSP key. (`languageRegistry.test.ts`, 66 tests)
 
 ### Completion criteria
 
-All listed major languages receive correct syntax highlighting or an explicitly documented fallback. Binary and oversized files cannot destabilize the editor.
+All listed major languages receive correct syntax highlighting or an explicitly documented fallback. Binary and oversized files cannot destabilize the editor. **Met.**
+
+### Known gap left for later
+
+`revealFileInTree` (`createWorkspaceSlice.ts`) still splits paths on `/` and will mismatch native Windows separators -- flagged for this PR in an earlier section's "Known gaps left for later" note, but it's a path-separator concern unrelated to language/file-type identification (this PR's actual scope), not something the approved PR 6 plan touched. Left flagged, not silently dropped; whichever future work addresses Windows path handling generally should pick it up.
 
 ## PR 7 — Workspace decomposition and lifecycle cleanup
 

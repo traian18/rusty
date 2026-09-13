@@ -24,6 +24,7 @@ const domain = (overrides: Partial<TabDomainState> = {}): TabDomainState => ({
   agentChats: {},
   agentStreams: {},
   agentPermissionRequests: {},
+  busyAgentTabIds: {},
   ...overrides,
 });
 
@@ -227,16 +228,21 @@ describe("seed and prune", () => {
     expect(pruned.canvasHistories).not.toHaveProperty("c1");
   });
 
-  it("prunes all three agent maps on close", () => {
+  it("prunes all four agent maps on close", () => {
     const state = domain({
       agentChats: { a: [] },
       agentStreams: { a: "partial" },
       agentPermissionRequests: { a: [] },
+      busyAgentTabIds: { a: true },
     });
     const pruned = pruneForClosedTab({ id: "a", type: "agent" }, state);
     expect(pruned.agentChats).not.toHaveProperty("a");
     expect(pruned.agentStreams).not.toHaveProperty("a");
     expect(pruned.agentPermissionRequests).not.toHaveProperty("a");
+    // REFACTOR_PLAN.md PR 7 commit 2: without this, a stale `true` here
+    // would incorrectly mark the next-opened Agent tab as busy immediately
+    // -- agent is a singleton, so it reuses this same tab id every time.
+    expect(pruned.busyAgentTabIds).not.toHaveProperty("a");
   });
 });
 
@@ -286,10 +292,47 @@ describe("close guards", () => {
     expect(closeGuardFor(canvasTab, state)).toMatchObject({ reason: "running" });
   });
 
-  it("allows closing every non-canvas type", () => {
+  it("allows closing every non-canvas type when nothing is busy", () => {
     for (const type of ALL_TYPES) {
       if (type === "canvas") continue;
       expect(closeGuardFor({ id: "t", type, title: "t" }, domain()).kind).toBe("allow");
     }
+  });
+
+  // REFACTOR_PLAN.md PR 7 commit 2: closing an Agent tab used to have no
+  // confirmation at all, unlike canvas -- these pin the fix.
+  it("confirms closing an Agent tab with an active run", () => {
+    const agentTab = { id: "agent", type: "agent" as const, title: "Agent" };
+    const state = domain({ busyAgentTabIds: { agent: true } });
+    expect(closeGuardFor(agentTab, state)).toEqual({
+      kind: "confirm",
+      reason: "running",
+      tabId: "agent",
+      title: "Agent",
+    });
+  });
+
+  it("allows closing an Agent tab with no active run", () => {
+    const agentTab = { id: "agent", type: "agent" as const, title: "Agent" };
+    expect(closeGuardFor(agentTab, domain()).kind).toBe("allow");
+  });
+
+  // Bonus consistency fix, same commit: task already computed isBusy but
+  // never gated closability on it.
+  it("confirms closing a running Task tab", () => {
+    const taskTab = { id: "t1", type: "task" as const, title: "Task", canvasId: "c1", taskNodeId: "n1" };
+    const state = domain({ canvasContexts: { c1: canvasContext({ nodeStatus: { n1: "running" } }) } });
+    expect(closeGuardFor(taskTab, state)).toEqual({
+      kind: "confirm",
+      reason: "running",
+      tabId: "t1",
+      title: "Task",
+    });
+  });
+
+  it("allows closing an idle Task tab", () => {
+    const taskTab = { id: "t1", type: "task" as const, title: "Task", canvasId: "c1", taskNodeId: "n1" };
+    const state = domain({ canvasContexts: { c1: canvasContext({ nodeStatus: { n1: "success" } }) } });
+    expect(closeGuardFor(taskTab, state).kind).toBe("allow");
   });
 });

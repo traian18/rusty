@@ -428,6 +428,10 @@ export interface WorkspaceState {
   clearAgentStream: (tabId: string) => void;
   addAgentPermissionRequest: (tabId: string, request: AgentPermissionRequest) => void;
   resolveAgentPermission: (tabId: string, requestId: string, approved: boolean) => void;
+  /** Which Agent tabs currently have an active run (REFACTOR_PLAN.md PR 7
+      commit 2) -- see TabDomainState's copy of this field for why. */
+  busyAgentTabIds: Record<string, boolean>;
+  setAgentTabBusy: (tabId: string, busy: boolean) => void;
 
   skills: Skill[];
   activeSkillId: string | null;

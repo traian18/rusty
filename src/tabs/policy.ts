@@ -78,18 +78,29 @@ const agent: TabPolicy<"agent"> = {
     "agent",
     "Agent",
     // Stays mounted because the agent's WebSocket is owned by the component
-    // and dies with it. PR 7 moves runs to an application service; until then
-    // unmounting an agent tab would kill its in-flight run.
+    // and dies with it. That ownership itself is unchanged by PR 7 (a
+    // deliberate scope decision -- see the PR 7 plan) since `keepAlive:
+    // "always"` already ties this component's mount lifetime to the tab's
+    // own lifetime; what PR 7 commit 2 fixes is narrower: closing this tab
+    // mid-run had no confirmation at all (isBusy/beforeClose below).
     "always",
   ),
   seedOnCreate: (tab, state) => ({
     agentChats: { ...state.agentChats, [tab.id]: [] },
   }),
+  isBusy: (tab, state) => !!state.busyAgentTabIds[tab.id],
+  beforeClose: (tab, state) => {
+    if (state.busyAgentTabIds[tab.id]) {
+      return { kind: "confirm", reason: "running", tabId: tab.id, title: tab.title };
+    }
+    return { kind: "allow" };
+  },
   pruneOnClose: (tab, state) => {
     const { [tab.id]: _chat, ...agentChats } = state.agentChats;
     const { [tab.id]: _stream, ...agentStreams } = state.agentStreams;
     const { [tab.id]: _perm, ...agentPermissionRequests } = state.agentPermissionRequests;
-    return { agentChats, agentStreams, agentPermissionRequests };
+    const { [tab.id]: _busy, ...busyAgentTabIds } = state.busyAgentTabIds;
+    return { agentChats, agentStreams, agentPermissionRequests, busyAgentTabIds };
   },
 };
 
@@ -188,6 +199,16 @@ const task: TabPolicy<"task"> = {
   keepAlive: "while-busy",
   isBusy: (tab, state) =>
     state.canvasContexts[tab.canvasId]?.nodeStatus?.[tab.taskNodeId] === "running",
+  // REFACTOR_PLAN.md PR 7 commit 2 bonus consistency fix: reuses this
+  // policy's own existing isBusy predicate (unlike agent, task never
+  // needed a new store field for this -- the running-node status it
+  // already reads from canvasContexts was always here).
+  beforeClose: (tab, state) => {
+    if (state.canvasContexts[tab.canvasId]?.nodeStatus?.[tab.taskNodeId] === "running") {
+      return { kind: "confirm", reason: "running", tabId: tab.id, title: tab.title };
+    }
+    return { kind: "allow" };
+  },
   closable: true,
 };
 

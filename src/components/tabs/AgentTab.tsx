@@ -13,6 +13,7 @@ import { useSelectableModels } from "../../hooks/useSelectableModels";
 import { resolveExecutionProvider } from "../../store/resolveExecutionProvider";
 import { agentChatService, AgentChatRun } from "../../services/agentChatService";
 import { agentHarnessClient } from "../../services/agentHarnessClient";
+import { registerTabStop, unregisterTabStop } from "../../tabs/tabStopRegistry";
 import { TokenBadge, TokenUsageLike } from "../ui/TokenBadge/TokenBadge";
 
 interface AgentTabProps {
@@ -45,6 +46,7 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
   const skills = useWorkspaceStore((state) => state.skills);
   const activeSkillId = useWorkspaceStore((state) => state.activeSkillId);
   const setActiveSkill = useWorkspaceStore((state) => state.setActiveSkill);
+  const setAgentTabBusy = useWorkspaceStore((state) => state.setAgentTabBusy);
 
   const [selectedModel, setSelectedModel] = useState(activeModel);
   const [selectedSkillId, setSelectedSkillId] = useState<string>(activeSkillId || DEFAULT_SKILL_ID);
@@ -134,6 +136,16 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
       }
     };
   }, [tab.id]);
+
+  // Mirrors isAgentBusy into the store (REFACTOR_PLAN.md PR 7 commit 2) so
+  // the `agent` tab policy -- a pure function with no component access --
+  // can implement isBusy/beforeClose the same way `canvas`'s already does.
+  // Cleared on unmount so a stale `true` can never linger for the next
+  // Agent tab (this is a singleton id, reused every time one is reopened).
+  useEffect(() => {
+    setAgentTabBusy(tab.id, isAgentBusy);
+    return () => setAgentTabBusy(tab.id, false);
+  }, [tab.id, isAgentBusy, setAgentTabBusy]);
 
   // ── Chat History ──────────────────────────────────────────────
   const loadChatHistory = useCallback(async () => {
@@ -292,6 +304,18 @@ export const AgentTab: React.FC<AgentTabProps> = ({ tab }) => {
     saveChatHistory();
     refreshHistoryAfterSave();
   };
+
+  // Registers this tab's stop callback (REFACTOR_PLAN.md PR 7 commit 2) so
+  // the close-intercept controller can generically say "stop whatever this
+  // tab is running" without knowing it's an Agent tab specifically. A ref
+  // holds the latest `handleStopExecution` closure so the registration
+  // itself doesn't need to churn every render.
+  const stopExecutionRef = useRef(handleStopExecution);
+  stopExecutionRef.current = handleStopExecution;
+  useEffect(() => {
+    registerTabStop(tab.id, () => stopExecutionRef.current());
+    return () => unregisterTabStop(tab.id);
+  }, [tab.id]);
 
   const handleAgentQuestionAnswer = (answer: string) => {
     if (agentQuestions.length === 0 || !agentRunRef.current) return;

@@ -9,6 +9,7 @@ const emptyDomain: TabDomainState = {
   agentChats: {},
   agentStreams: {},
   agentPermissionRequests: {},
+  busyAgentTabIds: {},
 };
 
 function canvasTab(id: string): TabInstance {

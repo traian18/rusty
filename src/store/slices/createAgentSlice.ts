@@ -4,6 +4,20 @@ export const createAgentSlice: WorkspaceSliceCreator = (set) => ({
   agentChats: {},
   agentStreams: {},
   agentPermissionRequests: {},
+  busyAgentTabIds: {},
+
+  // REFACTOR_PLAN.md PR 7 commit 2: AgentTab.tsx mirrors its own
+  // isAgentBusy (isStreaming || hasActiveSubagents) into this store field
+  // via an effect, so the `agent` tab policy -- a pure function with no
+  // React/component access -- can implement isBusy/beforeClose the same
+  // way `canvas`'s policy already does.
+  setAgentTabBusy: (tabId, busy) => set((state) => {
+    if (!busy && !(tabId in state.busyAgentTabIds)) return {};
+    const busyAgentTabIds = { ...state.busyAgentTabIds };
+    if (busy) busyAgentTabIds[tabId] = true;
+    else delete busyAgentTabIds[tabId];
+    return { busyAgentTabIds };
+  }),
 
   addAgentMessage: (tabId, message) => set((state) => {
     // An agent tab's WebSocket is torn down on unmount, which happens after

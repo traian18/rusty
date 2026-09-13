@@ -143,6 +143,11 @@ export interface TabDomainState {
   agentChats: Record<string, AgentMessage[]>;
   agentStreams: Record<string, string>;
   agentPermissionRequests: Record<string, AgentPermissionRequest[]>;
+  /** Which Agent tabs currently have an active run (REFACTOR_PLAN.md PR 7
+      commit 2) -- lets the `agent` tab policy's `isBusy`/`beforeClose`
+      confirm a mid-stream close the same way `canvas`'s already does,
+      without needing a ref into AgentTab.tsx's own component state. */
+  busyAgentTabIds: Record<string, boolean>;
 }
 
 export type Uniqueness = "global" | "resource" | "multiple";

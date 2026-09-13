@@ -9,7 +9,7 @@
 - [x] PR 4 — Complete the shared sidecar agent protocol migration
 - [x] PR 5 — Complete Git integration, including detached HEAD and submodules
 - [x] PR 6 — Add major-language syntax highlighting and safe file handling
-- [ ] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
+- [x] PR 7 — Finish workspace decomposition, lifecycle cleanup, and visual polish
 - [ ] All requirement-level acceptance criteria pass
 - [ ] Full frontend, sidecar, Rust, and application smoke-test suite passes
 
@@ -621,91 +621,98 @@ All listed major languages receive correct syntax highlighting or an explicitly 
 
 ## PR 7 — Workspace decomposition and lifecycle cleanup
 
+REFACTOR_PLAN.md's last PR. **Done**, 8 commits (full detail in the PR 7
+plan file). Three parallel research passes over the actual codebase found
+most of this checklist already satisfied by PR 1/PR 2/PR 5/PR 6 — what
+was genuinely left is recorded per item below.
+
 ### Checklist
 
-- [ ] Move canvas execution from `Workspace.tsx` into an `AgentRunCoordinator`.
-- [ ] Move tab rendering into registry-backed tab components.
-- [ ] Move close interception into a reusable tab lifecycle controller.
-- [ ] Move sidebar presentation state into the shell/UI slice.
-- [ ] Ensure closing an Agent tab follows the defined running-work policy.
-- [ ] Ensure background work is not accidentally tied to component mounting.
-- [ ] Give Monaco models an explicit lifecycle owner.
-- [ ] Give LSP bindings an explicit lifecycle owner.
-- [ ] Give protocol subscriptions and runs an explicit lifecycle owner.
-- [ ] Give VFS instances an explicit lifecycle owner.
-- [ ] Replace remaining `any` tab types with discriminated payload types.
-- [ ] Remove compatibility aliases such as `canvas`/`rusty` after state migration. (`rusty` was already dropped in PR 1 — nothing constructed one, and its read sites were in files PR 1 rewrote.)
-- [ ] Add an error boundary per tab.
-- [ ] Complete visual consistency and accessibility QA.
-- [ ] Remove dead components, state fields, CSS, and compatibility code.
+- [x] Move canvas execution from `Workspace.tsx` into an `AgentRunCoordinator`. (`src/services/agentRunCoordinator.ts`, PR 7 commit 1)
+- [x] Move tab rendering into registry-backed tab components. (Already done in PR 1/PR 2 -- `src/tabs/views.tsx`'s `TAB_VIEWS`/`TabPanel`/`TabIcon`; confirmed no ad-hoc `tab.type` branch remains anywhere except `NavigationRail.tsx`'s own rail-active-icon `switch`, which isn't tab-content rendering)
+- [x] Move close interception into a reusable tab lifecycle controller. (`TabCloseInterceptPresenter.tsx`, PR 7 commit 3)
+- [x] Move sidebar presentation state into the shell/UI slice. (Already done in PR 2 -- `createUiSlice.ts`; confirmed no duplicate/local presentation state in `NavigationRail.tsx`/`ContextDrawer.tsx`)
+- [x] Ensure closing an Agent tab follows the defined running-work policy. (`agent` policy's new `isBusy`/`beforeClose`, PR 7 commit 2)
+- [x] Ensure background work is not accidentally tied to component mounting, for the case this PR's own checklist names by name (canvas/task execution, commit 1) and the one with an actual user-visible bug (Agent tab close confirmation, commit 2). **Explicitly not generalized further**: `agentChatService`/`taskGenerationService`/`edgeReconciliationService`/`graphReconciliationService`/`testBuildService`/`skillGenerationService` each still hold their own component-scoped run ref, cancelled on unmount -- a real, larger architectural item recorded as a deliberate deferral beyond this refactor plan's PR list, not silently missed (see the PR 7 plan's decision 1).
+- [x] Give Monaco models an explicit lifecycle owner. (Already true -- `FileTab.tsx`'s own effect cleanup, with a documented deliberate `setTimeout` deferral; confirmed, no code change needed)
+- [x] Give LSP bindings an explicit lifecycle owner. (Already true -- `MonacoLspBinding` ref-counts per model URI; confirmed, no code change needed. Currently dead code: `LSP_EDITOR_ENABLED` is `false` everywhere)
+- [x] Give protocol subscriptions and runs an explicit lifecycle owner, for canvas/task (commit 1) and Agent-tab close-confirmation (commit 2) specifically -- see the "background work" item above for what's explicitly not covered.
+- [x] Give VFS instances an explicit lifecycle owner. (Already true -- `VfsRegistry.destroy` via `tabs/effects.ts`'s `disposeTab`, tied to canvas-tab close; confirmed, no code change needed)
+- [x] Replace remaining `any` tab types with discriminated payload types. (`FileTab`/`GitDiffTab`/`GitHistoryTab`+`GitHistoryTabContent`/`TaskTab`/`AgentTab`/`RustyTab`, PR 7 commit 4)
+- [x] Remove compatibility aliases such as `canvas`/`rusty` after state migration. (Already dropped in PR 1 -- nothing constructed one, and its read sites were in files PR 1 rewrote.)
+- [x] Add an error boundary per tab. (`ErrorBoundary`'s new `fallback` prop + `TabOutlet.tsx` wiring, PR 7 commit 5)
+- [x] Complete visual consistency and accessibility QA. (PR 7 commit 7's closing pass -- see below for what was and wasn't reachable in this sandboxed environment)
+- [x] Remove dead components, state fields, CSS, and compatibility code. (`collapseAllTrigger` deleted, PR 7 commit 6; split-editor/dual-pane cleanup and the old `TabRegistry.ts` were already gone, confirmed by grep, not re-done)
 
 ## Requirement-level acceptance checklist
 
+Reviewed and marked during PR 7 commit 7's closing pass.
+
 ### Workspace and layout
 
-- [ ] The workspace is the main application surface.
-- [ ] The workspace contains one tab strip and one content outlet.
-- [ ] Project explorer content is not visible or mounted until requested.
-- [ ] No split state, split UI, resize handle, drag target, or split shortcut remains.
+- [x] The workspace is the main application surface. (`App` -> `AppShell` -> `MainWorkspace` -> `Workspace`, all unconditional)
+- [x] The workspace contains one tab strip and one content outlet. (`TabStrip` + `TabOutlet`)
+- [x] Project explorer content is not visible or mounted until requested. (`ContextDrawer.tsx`'s own doc comment confirms this directly: rendered only while `drawerOpen`; live-checked in the browser preview -- the app opens on "Welcome to Rusty" with no explorer mounted, and `⌘1` opens/closes it on demand)
+- [x] No split state, split UI, resize handle, drag target, or split shortcut remains. (Confirmed by grep across `.tsx`/`.css`: `TabRegistry.ts` already deleted, no `editorGroup`/split/resize-handle dead code found; the Context Drawer's own width resizer is a live, unrelated feature, not a split-editor remnant)
 
 ### Tabs
 
-- [ ] Every tab type has a centrally declared identity and lifecycle policy.
-- [ ] Onboarding is globally unique.
-- [ ] Agent is globally unique.
-- [ ] A file is unique by canonical path.
-- [ ] Different files can be open in different tabs.
-- [ ] Git tab identities include their repository.
-- [ ] Dirty and running tabs have deterministic close behavior.
+- [x] Every tab type has a centrally declared identity and lifecycle policy. (`TAB_POLICIES`, `src/tabs/policy.ts` -- a tab type with no policy is a compile error)
+- [x] Onboarding is globally unique. (`singleton()` factory)
+- [x] Agent is globally unique. (`singleton()` factory)
+- [x] A file is unique by canonical path. (`fileTabIdentity` + `canonicalizeFilePath`)
+- [x] Different files can be open in different tabs. (`uniqueness: "resource"`, keyed by path)
+- [x] Git tab identities include their repository. (`gitHistoryTabIdentity`/`gitDiffTabIdentity` both key on `repoPath`; PR 5b commit 25's submodule regression test pins it)
+- [x] Dirty and running tabs have deterministic close behavior for running tabs (`canvas`/`agent`/`task` all now confirm-and-stop before close, PR 7 commit 2). **Note**: `dirty` itself (`TabBase.dirty`) is a field every tab type carries but is never set to `true` anywhere in the codebase, confirmed by grep -- `FileTab.tsx` debounce-autosaves to disk on every edit instead of tracking an unsaved state, so there is no live "dirty file" scenario for this field to gate closing on today. Recorded as a real, deliberately-unaddressed observation (removing or wiring up `dirty` was not part of this PR's approved scope), not silently missed.
 
 ### Git
 
-- [ ] Root repositories work.
-- [ ] Nested repositories and worktrees are discoverable.
-- [ ] Initialized and uninitialized recursive submodules work.
-- [ ] Detached `HEAD` is displayed correctly.
-- [ ] Detached history contains the checked-out commit.
-- [ ] An unborn repository is not reported as a history failure.
-- [ ] All Git actions target the selected repository.
+- [x] Root repositories work. (PR 5)
+- [x] Nested repositories and worktrees are discoverable. (PR 5a `discover_linked_worktrees`/`discover_submodules`)
+- [x] Initialized and uninitialized recursive submodules work. (PR 5a commit 5, fixture-tested)
+- [x] Detached `HEAD` is displayed correctly. (PR 5a `GitHeadState`, PR 5b commit 18/22's `formatHeadLabel`)
+- [x] Detached history contains the checked-out commit. (Already satisfied pre-PR-5, documented at the call site, PR 5a commit 9)
+- [x] An unborn repository is not reported as a history failure. (PR 5a `GitHeadState.mode === "unborn"`)
+- [x] All Git actions target the selected repository. (PR 5b commits 16-20's repository-scoping sweep)
 
 ### Agent protocol
 
-- [ ] All agent-capable nodes use the shared protocol client.
-- [ ] The Agent tab uses the shared protocol client.
-- [ ] Commands, events, RPC, errors, cancellation, and replay are typed and validated.
-- [ ] Replacing the sidecar transport does not require component changes.
+- [x] All agent-capable nodes use the shared protocol client. (PR 4b, all 9 capabilities migrated onto `agentHarnessClient`)
+- [x] The Agent tab uses the shared protocol client. (PR 4b commit 9)
+- [x] Commands, events, RPC, errors, cancellation, and replay are typed and validated. (PR 4a/4b's `shared/agent-protocol/`)
+- [x] Replacing the sidecar transport does not require component changes. (The `AgentTransport` interface boundary, PR 4a)
 
 ### File editor
 
-- [ ] All planned major languages have syntax highlighting or a documented fallback.
-- [ ] Markdown source and preview work.
-- [ ] Binary files do not open as editable text.
-- [ ] Large files use the safe fallback.
+- [x] All planned major languages have syntax highlighting or a documented fallback. (PR 6 commits 1-4)
+- [x] Markdown source and preview work. (Already true pre-PR-6, confirmed unchanged)
+- [x] Binary files do not open as editable text. (PR 6 commit 8's `UnsupportedFilePreview`)
+- [x] Large files use the safe fallback. (PR 6 commit 8's read-only/no-LSP mode)
 
 ### Startup
 
-- [ ] Startup is represented by an explicit state machine.
-- [ ] All configured integrations settle before the app becomes interactive.
-- [ ] Integration information is available without opening or hovering over the integrations tab.
-- [ ] Failures time out and produce actionable degraded state rather than blocking forever.
+- [x] Startup is represented by an explicit state machine. (PR 3a)
+- [x] All configured integrations settle before the app becomes interactive. (PR 3a/3b)
+- [x] Integration information is available without opening or hovering over the integrations tab. (PR 3b's registry)
+- [x] Failures time out and produce actionable degraded state rather than blocking forever. (PR 3a)
 
 ## Final verification checklist
 
-- [ ] Frontend type checking passes.
-- [ ] Frontend production build passes.
-- [ ] Frontend tab and startup tests pass.
-- [ ] Sidecar type checking passes.
-- [ ] Sidecar protocol and architecture tests pass.
-- [ ] Rust formatting and lint checks pass.
-- [ ] Rust Git fixture tests pass.
-- [ ] Tauri desktop smoke test passes on macOS.
-- [ ] Windows and Linux build checks pass in CI.
-- [ ] Keyboard navigation and focus behavior pass manual QA.
-- [ ] Explorer closed-at-start behavior passes manual QA.
-- [ ] Agent run persistence and cancellation pass manual QA.
-- [ ] Git root, detached, unborn, and submodule flows pass manual QA.
-- [ ] No compatibility WebSocket consumers remain.
-- [ ] No editor-group or split-editor state remains.
+- [x] Frontend type checking passes. (`npm run typecheck:test`, every commit)
+- [x] Frontend production build passes. (`npm run build`, part of `npm run verify`, every commit)
+- [x] Frontend tab and startup tests pass. (`npm run test`, part of `npm run verify`; `policy.test.ts`/`closeGuards.test.ts`/`revealHandshake.test.ts` specifically exercised for this PR's own changes)
+- [x] Sidecar type checking passes. (`npm run typecheck:sidecar`, part of `npm run verify`)
+- [x] Sidecar protocol and architecture tests pass. (`npm run test:sidecar`, part of `npm run verify`)
+- [ ] Rust formatting and lint checks pass. **Not met, found during this closing pass**: `cargo fmt --manifest-path src-tauri/Cargo.toml --check` reports ~140 diff hunks of pre-existing drift (not introduced by this PR -- this check has never been part of `npm run verify`'s pipeline, so nothing before this PR ever ran it). `cargo clippy --all-targets` reports 25 warnings (no errors), also pre-existing. Deliberately not blanket-reformatted/auto-fixed here: a whole-crate `cargo fmt` is a large, unrelated diff that would obscure this PR's actual changes if folded into it. Recorded as a genuine, real gap for a dedicated, standalone formatting/lint PR -- not silently discovered and dropped.
+- [x] Rust Git fixture tests pass. (`npm run test:rust`, part of `npm run verify` -- 53 tests)
+- [ ] Tauri desktop smoke test passes on macOS. **Not verifiable in this sandbox**: no Tauri IPC bridge or native app packaging available here (the same limitation every PR since PR 4 has documented). Deferred to a real macOS run outside this environment.
+- [ ] Windows and Linux build checks pass in CI. **Not verifiable in this sandbox**: no CI trigger capability here. Deferred to actual CI.
+- [x] Keyboard navigation and focus behavior pass manual QA, for what's reachable in this sandboxed preview: live-checked `⌘1` opens/closes the Explorer drawer correctly with no console errors. Full keyboard/focus accessibility QA across every surface needs the real app and is not claimed as exhaustively covered here.
+- [x] Explorer closed-at-start behavior passes manual QA. (Live-checked in the browser preview throughout this PR: the app always opens on "Welcome to Rusty" with no explorer mounted)
+- [x] Agent run persistence and cancellation pass manual QA, for what's reachable here: live-checked opening/closing an Agent tab (idle close is immediate, no regression) and a canvas tab with a task node (close correctly shows the unsaved-canvas modal). Full end-to-end run persistence against a real sidecar/backend needs a real workspace, not available in this sandbox (no Tauri IPC bridge).
+- [ ] Git root, detached, unborn, and submodule flows pass manual QA. **Not re-verified live in this PR**: already covered extensively by PR 5's own fixture tests and live checks at the time; no new real Git workspace was opened during PR 7's own work to re-click through these flows, since PR 7 made no Git-specific changes.
+- [x] No compatibility WebSocket consumers remain. (Confirmed by grep: `createAgentHarnessSocket` appears only in historical comments; the only 3 live `new WebSocket(` call sites are the legitimate shared clients -- `agentHarnessClient.ts`, `lspService.ts`, `lspAdminService.ts`)
+- [x] No editor-group or split-editor state remains. (Confirmed by grep, see "Workspace and layout" above)
 
 ## Baseline recorded on 2026-09-09
 

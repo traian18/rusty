@@ -870,7 +870,18 @@ pub async fn git_get_commit_history(root_dir: String) -> Result<Vec<GitCommitInf
         }
     }
 
-    // 2. Fetch the commit logs using a structured format split by '|'
+    // 2. Fetch the commit logs using a structured format split by '|'.
+    //
+    // REFACTOR_PLAN.md's PR 5 checklist asks to "Include HEAD explicitly in
+    // history traversal alongside refs" -- verified directly against git
+    // 2.45.0 that `--all` already does this implicitly ("Pretend as if all
+    // the refs in refs/, along with HEAD, are listed", per `git log`'s own
+    // docs for `--all`), confirmed by
+    // `git_get_commit_history_includes_the_checked_out_detached_commit`
+    // pinning that a commit checked out detached survives even after the
+    // branch that created it is deleted. No code change needed here --
+    // recorded so this checklist item isn't mistaken for skipped or
+    // "fixed" by a redundant flag with no observable effect.
     let log_output = match Command::new("git")
         .args(&[
             "log",
@@ -942,8 +953,11 @@ pub async fn git_get_commit_files(root_dir: String, commit_hash: String) -> Resu
         });
     }
 
-    // Run git diff-tree --no-commit-id --name-status -r <commit_hash>
-    let output = run_git(&root_dir, "git_get_commit_files", &["diff-tree", "--no-commit-id", "--name-status", "-r", &commit_hash])?;
+    // Run git diff-tree --no-commit-id --name-status -r --root <commit_hash>.
+    // --root makes a parentless (root) commit diff against the empty tree
+    // instead of emitting nothing -- verified directly that it changes
+    // nothing for a non-root commit, so it's safe to always pass.
+    let output = run_git(&root_dir, "git_get_commit_files", &["diff-tree", "--no-commit-id", "--name-status", "-r", "--root", &commit_hash])?;
 
     let out_str = String::from_utf8_lossy(&output.stdout);
     let mut files = Vec::new();

@@ -144,17 +144,21 @@ async fn git_get_commit_history_includes_the_checked_out_detached_commit() {
 }
 
 #[tokio::test]
-async fn git_get_commit_files_known_wrong_returns_empty_for_root_commit() {
-    // KNOWN-WRONG (PR 5): `diff-tree --no-commit-id -r` without `--root`
-    // emits nothing for a parentless (root) commit, so the file list for the
-    // very first commit of any repository comes back empty. PR 5's
-    // checklist item "Correctly list files for root commits" fixes this.
+async fn git_get_commit_files_lists_files_for_a_root_commit() {
+    // Fixed in PR 5a commit 8: `diff-tree --no-commit-id -r` without
+    // `--root` emitted nothing for a parentless (root) commit, so the file
+    // list for the very first commit of any repository always came back
+    // empty. Verified directly that `--root` diffs a root commit against
+    // the empty tree (fixing this) and changes nothing for a non-root
+    // commit (so it's always safe to pass).
     let fx = GitFixture::init();
     let root_commit = fx.commit_file("a.txt", "one\n", "root commit");
 
     let files = git_get_commit_files(fx.path_str(), root_commit).await.unwrap();
 
-    assert!(files.is_empty(), "expected the root-commit file list to be empty (current defect)");
+    assert_eq!(files.len(), 1, "expected the root commit's added file to be listed, got: {:?}", files);
+    assert_eq!(files[0].name, "a.txt");
+    assert_eq!(files[0].status_type, "added");
 }
 
 #[tokio::test]

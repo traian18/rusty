@@ -149,6 +149,15 @@ export interface LanguageRule {
  * (`resolveLanguage` checks all filenames, then all prefixes, then all
  * extensions, in that priority order, regardless of array position) --
  * order here is purely for readability, grouped by language family.
+ *
+ * Deliberately absent: Vue (`.vue`) and Svelte (`.svelte`). REFACTOR_PLAN.md's
+ * PR 6 checklist itself only asks for these "where Monaco tokenization
+ * support is available" -- confirmed directly that this installed
+ * monaco-editor build has no dedicated tokenizer for either (no `vue`/
+ * `svelte` entry in its basic-languages set, and no core language module
+ * for them either). A `.vue`/`.svelte` file falls through to the default
+ * "plaintext" rule below, the same honest fallback every other
+ * Monaco-unsupported extension gets -- not a gap, a documented decision.
  */
 const RULES: LanguageRule[] = [
   // Exact filenames
@@ -157,7 +166,13 @@ const RULES: LanguageRule[] = [
   { id: "ignore", iconKey: "git", filenames: [".gitignore", ".gitconfig", ".gitattributes"] },
   { id: "yaml", iconKey: "docker", filenames: ["docker-compose.yml", "docker-compose.yaml"] },
   { id: "ruby", iconKey: "ruby", filenames: ["gemfile", "gemfile.lock"] },
-  { id: "makefile", iconKey: "config", filenames: ["makefile"] },
+  // Monaco has no "makefile" tokenizer (confirmed directly: no such
+  // directory in the installed monaco-editor's basic-languages set) --
+  // resolves to "plaintext" explicitly rather than claiming an id Monaco
+  // doesn't recognize, which silently fell back to no highlighting anyway.
+  { id: "plaintext", iconKey: "config", filenames: ["makefile"] },
+  // Same reasoning: no dedicated "cmake" tokenizer either.
+  { id: "plaintext", iconKey: "config", filenames: ["cmakelists.txt"], extensions: ["cmake"] },
 
   // Filename prefixes
   { id: "properties", iconKey: "env", filenamePrefixes: [".env"] },
@@ -188,7 +203,9 @@ const RULES: LanguageRule[] = [
   // `.ps1` used to be lumped in with the Windows-batch "bat" id above, which
   // has its own, wrong, tokenizer. Fixed as part of PR 6's coverage pass.
   { id: "powershell", iconKey: "powershell", extensions: ["ps1", "psm1", "psd1"] },
-  { id: "toml", iconKey: "config", extensions: ["toml"] },
+  // Monaco has no "toml" tokenizer either (same verification as makefile
+  // above) -- explicit "plaintext", not a silently-unrecognized "toml" id.
+  { id: "plaintext", iconKey: "config", extensions: ["toml"] },
   { id: "yaml", iconKey: "config", extensions: ["yaml", "yml"] },
   { id: "xml", iconKey: "config", extensions: ["xml"] },
   { id: "ini", iconKey: "config", extensions: ["ini", "conf", "config", "lock", "properties"] },

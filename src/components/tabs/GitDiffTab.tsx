@@ -7,6 +7,7 @@ import { getFileTypeDetails } from "../../services/fileTypeService";
 import { useDiffViewMode } from "../../hooks/useDiffViewMode";
 import { DiffViewToggle } from "../ui/DiffViewToggle";
 import { createMonacoDiffOptions } from "../../editor/monacoOptions";
+import { gitErrorMessage } from "../git/gitErrors";
 
 interface GitDiffTabProps {
   tab: any;
@@ -81,10 +82,11 @@ export const GitDiffTab: React.FC<GitDiffTabProps> = ({ tab, isActive }) => {
 
         setGitOriginalCode(original);
         setGitModifiedCode(modified);
-      } catch (err: any) {
+      } catch (err) {
         console.error("GitDiffTab failed to load git diff:", err);
-        setGitOriginalCode(`// Error reading original content: ${err.message}`);
-        setGitModifiedCode(`// Error reading modified content: ${err.message}`);
+        const message = gitErrorMessage(err);
+        setGitOriginalCode(`// Error reading original content: ${message}`);
+        setGitModifiedCode(`// Error reading modified content: ${message}`);
       } finally {
         setLoading(false);
       }

@@ -1,5 +1,5 @@
 import React from "react";
-import { getMonacoLanguageId } from "./languageRegistry";
+import { getMonacoLanguageId, resolveLanguage, type IconKey } from "./languageRegistry";
 
 // --- 1. Custom SVG Branding Logos for Technologies ---
 
@@ -195,113 +195,42 @@ export const getFileTypeDetails = (fileName: string): FileTypeDetails => {
   return { icon: iconForFile(fileName), color: "", language: getMonacoLanguageId(fileName) };
 };
 
+/**
+ * IconKey -> component (REFACTOR_PLAN.md PR 6 commit 2). This is the only
+ * place that still knows about the actual logo components -- icon
+ * *selection* (which extension/filename gets which key) now lives in
+ * languageRegistry.ts's `RULES`, not here, so the two can never drift back
+ * apart the way fileTypeService's icon switch and lspLanguage's id switch
+ * once did.
+ */
+const ICONS: Record<IconKey, React.FC<{ size: number; className?: string }>> = {
+  react: ReactLogo,
+  typescript: TypeScriptLogo,
+  javascript: JavaScriptLogo,
+  html: HtmlLogo,
+  css: CssLogo,
+  json: JsonLogo,
+  markdown: MarkdownLogo,
+  python: PythonLogo,
+  java: JavaLogo,
+  rust: RustLogo,
+  go: GoLogo,
+  ruby: RubyLogo,
+  php: PhpLogo,
+  cpp: CppLogo,
+  c: CLogo,
+  sql: SqlLogo,
+  shell: ShellLogo,
+  config: ConfigLogo,
+  env: EnvLogo,
+  git: GitLogo,
+  docker: DockerLogo,
+  default: DefaultLogo,
+};
+
 /** Resolve the technology logo for a file name (used by FileIcon + getFileTypeDetails). */
 function iconForFile(fileName: string): React.FC<{ size: number; className?: string }> {
-  const lowerName = fileName.toLowerCase();
-
-  // 1. Exact full file name checks (highest priority)
-  if (lowerName === "dockerfile") return DockerLogo;
-  if (lowerName === "package.json") return JsonLogo;
-  if (lowerName === "tsconfig.json" || lowerName === "jsconfig.json") return JsonLogo;
-  if (lowerName === ".gitignore" || lowerName === ".gitconfig" || lowerName === ".gitattributes") return GitLogo;
-  if (lowerName === "docker-compose.yml" || lowerName === "docker-compose.yaml") return DockerLogo;
-  if (lowerName === "gemfile" || lowerName === "gemfile.lock") return RubyLogo;
-  if (lowerName === "makefile") return ConfigLogo;
-
-  // 2. Prefix checks
-  if (lowerName.startsWith(".env")) return EnvLogo;
-
-  // 3. Extension checks
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    // React / Web Tech
-    case "tsx":
-    case "jsx":
-      return ReactLogo;
-    case "ts":
-    case "mts":
-    case "cts":
-      return TypeScriptLogo;
-    case "js":
-    case "mjs":
-    case "cjs":
-      return JavaScriptLogo;
-    case "html":
-    case "htm":
-    case "xhtml":
-      return HtmlLogo;
-    case "css":
-    case "scss":
-    case "sass":
-    case "less":
-      return CssLogo;
-    case "json":
-      return JsonLogo;
-    case "md":
-    case "markdown":
-      return MarkdownLogo;
-
-    // Languages
-    case "py":
-    case "pyw":
-      return PythonLogo;
-    case "java":
-    case "class":
-    case "jar":
-      return JavaLogo;
-    case "rs":
-      return RustLogo;
-    case "go":
-      return GoLogo;
-    case "rb":
-      return RubyLogo;
-    case "php":
-      return PhpLogo;
-    case "cpp":
-    case "cc":
-    case "cxx":
-    case "hpp":
-    case "h":
-      return CppLogo;
-    case "c":
-      return CLogo;
-
-    // Database / SQL
-    case "sql":
-    case "psql":
-    case "sqlite":
-    case "sqlite3":
-    case "db":
-      return SqlLogo;
-
-    // Shell Scripts
-    case "sh":
-    case "bash":
-    case "zsh":
-    case "fish":
-    case "bat":
-    case "cmd":
-    case "ps1":
-      return ShellLogo;
-
-    // Configurations & Markup
-    case "toml":
-      return ConfigLogo;
-    case "yaml":
-    case "yml":
-      return ConfigLogo;
-    case "xml":
-      return ConfigLogo;
-    case "ini":
-    case "conf":
-    case "config":
-    case "lock":
-    case "properties":
-      return ConfigLogo;
-
-    default:
-      return DefaultLogo;
-  }
+  return ICONS[resolveLanguage(fileName).iconKey];
 }
 
 interface FileIconProps {

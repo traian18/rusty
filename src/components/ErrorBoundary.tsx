@@ -3,6 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface Props {
   children?: ReactNode;
+  /** Custom fallback UI (REFACTOR_PLAN.md PR 7 commit 5) -- when absent,
+      behavior is exactly what it always was: the full-viewport crash
+      screen below, still the only one used at the app root (main.tsx).
+      A tab-scoped boundary (TabOutlet.tsx) passes a compact, panel-shaped
+      fallback instead, since a per-tab boundary must not claim the whole
+      viewport the way a top-level crash screen can. */
+  fallback?: (error: Error, reset: () => void) => ReactNode;
 }
 
 interface State {
@@ -31,8 +38,13 @@ export class ErrorBoundary extends Component<Props, State> {
     }).catch((err) => console.error("Failed to log crash to terminal:", err));
   }
 
+  private reset = () => this.setState({ hasError: false, error: null, errorInfo: null });
+
   public render() {
     if (this.state.hasError) {
+      if (this.props.fallback && this.state.error) {
+        return this.props.fallback(this.state.error, this.reset);
+      }
       return (
         <div className="flex h-screen w-screen flex-col items-center justify-center bg-[var(--color-surface-app)] text-[var(--color-fg-strong)] font-sans p-6 overflow-auto">
           <div className="max-w-2xl w-full bg-[var(--color-surface-sunken)] border border-[var(--color-status-danger-border)] rounded-xl p-6 shadow-2xl space-y-4">
@@ -58,7 +70,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 Reload Application
               </button>
               <button
-                onClick={() => this.setState({ hasError: false, error: null, errorInfo: null })}
+                onClick={this.reset}
                 className="bg-[var(--color-surface-sunken)] hover:bg-[var(--color-surface-sunken)] text-[var(--color-fg-strong)] font-mono font-bold text-xs px-4 py-2 rounded-lg transition-colors cursor-pointer"
               >
                 Reset State

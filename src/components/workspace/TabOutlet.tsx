@@ -3,6 +3,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useWorkspaceStore } from "../../store";
 import { shouldKeepMounted } from "../../tabs/policy";
 import { TabPanel, getTabView, type TabViewContext } from "../../tabs/views";
+import { ErrorBoundary } from "../ErrorBoundary";
+import { TabCrashFallback } from "./TabCrashFallback";
 import styles from "./TabOutlet.module.css";
 
 interface TabOutletProps {
@@ -47,7 +49,9 @@ export const TabOutlet: React.FC<TabOutletProps> = ({ context }) => {
               surface === "canvas" ? styles.canvasSurface : styles.editorSurface
             }`}
           >
-            <TabPanel tab={tab} isActive={isActive} context={context} />
+            <ErrorBoundary fallback={(error, reset) => <TabCrashFallback error={error} reset={reset} />}>
+              <TabPanel tab={tab} isActive={isActive} context={context} />
+            </ErrorBoundary>
           </div>
         );
       })}

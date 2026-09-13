@@ -48,114 +48,132 @@ function mapGitRepository(raw: any): GitRepository {
   };
 }
 
-export const createGitSlice: WorkspaceSliceCreator = (set, get) => ({
-  gitStatus: null,
-  repositories: [],
-  statusByRepositoryId: {},
-  activeRepositoryId: null,
-  lastRename: null,
-
-  setGitStatus: (gitStatus) => set({ gitStatus }),
-  setActiveRepositoryId: (activeRepositoryId) => set({ activeRepositoryId }),
-  setLastRename: (lastRename) => set({ lastRename }),
-
-  loadGitStatus: async (rootDir) => {
-    const rootPath = rootDir || get().rootPath;
-    if (!rootPath) {
-      set({ gitStatus: null });
-      return;
-    }
-    try {
-      const result: any = await invoke("git_status", { rootDir: rootPath });
-      const status = mapGitStatusResult(result);
-      set((state) => {
-        // Opportunistically mirrors into the new per-repository bucket too
-        // (REFACTOR_PLAN.md PR 5b commit 20), so consumers that have moved
-        // onto statusByRepositoryId (NavigationRailPresenter's badge,
-        // FileTree's markers) see real data as soon as *anything* still
-        // calls this deprecated loader -- without this, statusByRepositoryId
-        // would stay empty until every caller migrates to
-        // loadRepositoryGitStatus, which hasn't happened yet. Only mirrors
-        // when repositories has already resolved a match; silently a no-op
-        // otherwise (e.g. right at startup, before discoverRepositories has
-        // run) rather than guessing which repository this status belongs to.
-        const matchingRepo = state.repositories.find((repo) => repo.worktreePath === rootPath);
-        return {
-          gitStatus: status,
-          statusByRepositoryId: matchingRepo
-            ? { ...state.statusByRepositoryId, [matchingRepo.id]: status }
-            : state.statusByRepositoryId,
-        };
-      });
-    } catch (error) {
-      console.error("Failed to load git status:", error);
-    }
-  },
-
-  discoverRepositories: async () => {
-    const rootPath = get().rootPath;
-    if (!rootPath) {
-      set({ repositories: [], activeRepositoryId: null });
-      return;
-    }
-    try {
-      const [worktreesRaw, submodulesRaw] = await Promise.all([
-        invoke<any[]>("git_discover_linked_worktrees", { rootDir: rootPath }),
-        invoke<any[]>("git_discover_submodules", { rootDir: rootPath }),
-      ]);
-      // git_discover_linked_worktrees already includes the main worktree
-      // (i.e. rootPath itself), so it alone covers the "workspace" entry --
-      // no separate git_discover_repository call is needed here.
-      const repositories = [...worktreesRaw, ...submodulesRaw].map(mapGitRepository);
-      set((state) => {
-        const activeStillPresent =
-          state.activeRepositoryId && repositories.some((repo) => repo.id === state.activeRepositoryId);
-        return {
-          repositories,
-          activeRepositoryId: activeStillPresent
-            ? state.activeRepositoryId
-            : repositories.find((repo) => repo.kind === "workspace")?.id ?? repositories[0]?.id ?? null,
-        };
-      });
-    } catch (error) {
-      console.error("Failed to discover git repositories:", error);
-    }
-  },
-
-  loadRepositoryGitStatus: async (repositoryId) => {
+export const createGitSlice: WorkspaceSliceCreator = (set, get) => {
+  /** After a submodule action changes what it has checked out (init only
+      registers config, so it's a no-op for that one -- harmless), refreshes
+      both the submodule's own status and its parent's (REFACTOR_PLAN.md PR
+      5b commit 24) -- the parent's `git status` is what actually shows the
+      changed gitlink, so a parent already open in Source Control sees it
+      immediately instead of only after some unrelated later refresh. */
+  const refreshSubmoduleAndParentStatus = async (repositoryId: string) => {
     const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
     if (!repo) return;
-    try {
-      const result: any = await invoke("git_status", { rootDir: repo.worktreePath });
-      set((state) => ({
-        statusByRepositoryId: { ...state.statusByRepositoryId, [repositoryId]: mapGitStatusResult(result) },
-      }));
-    } catch (error) {
-      console.error(`Failed to load git status for repository ${repositoryId}:`, error);
-    }
-  },
+    const targetIds = [repo.id, repo.parentId].filter((id): id is string => Boolean(id));
+    await Promise.all(targetIds.map((id) => get().loadRepositoryGitStatus(id)));
+  };
 
-  initSubmodule: async (repositoryId) => {
-    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
-    const rootPath = get().rootPath;
-    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
-    await invoke("git_submodule_init", { rootDir: rootPath, submodulePath: repo.submodulePath });
-    await get().discoverRepositories();
-  },
+  return {
+    gitStatus: null,
+    repositories: [],
+    statusByRepositoryId: {},
+    activeRepositoryId: null,
+    lastRename: null,
 
-  updateSubmodule: async (repositoryId, recursive) => {
-    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
-    const rootPath = get().rootPath;
-    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
-    await invoke("git_submodule_update", { rootDir: rootPath, submodulePath: repo.submodulePath, recursive });
-    await get().discoverRepositories();
-  },
+    setGitStatus: (gitStatus) => set({ gitStatus }),
+    setActiveRepositoryId: (activeRepositoryId) => set({ activeRepositoryId }),
+    setLastRename: (lastRename) => set({ lastRename }),
 
-  syncSubmodule: async (repositoryId) => {
-    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
-    const rootPath = get().rootPath;
-    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
-    await invoke("git_submodule_sync", { rootDir: rootPath, submodulePath: repo.submodulePath });
-    await get().discoverRepositories();
-  },
-});
+    loadGitStatus: async (rootDir) => {
+      const rootPath = rootDir || get().rootPath;
+      if (!rootPath) {
+        set({ gitStatus: null });
+        return;
+      }
+      try {
+        const result: any = await invoke("git_status", { rootDir: rootPath });
+        const status = mapGitStatusResult(result);
+        set((state) => {
+          // Opportunistically mirrors into the new per-repository bucket too
+          // (REFACTOR_PLAN.md PR 5b commit 20), so consumers that have moved
+          // onto statusByRepositoryId (NavigationRailPresenter's badge,
+          // FileTree's markers) see real data as soon as *anything* still
+          // calls this deprecated loader -- without this, statusByRepositoryId
+          // would stay empty until every caller migrates to
+          // loadRepositoryGitStatus, which hasn't happened yet. Only mirrors
+          // when repositories has already resolved a match; silently a no-op
+          // otherwise (e.g. right at startup, before discoverRepositories has
+          // run) rather than guessing which repository this status belongs to.
+          const matchingRepo = state.repositories.find((repo) => repo.worktreePath === rootPath);
+          return {
+            gitStatus: status,
+            statusByRepositoryId: matchingRepo
+              ? { ...state.statusByRepositoryId, [matchingRepo.id]: status }
+              : state.statusByRepositoryId,
+          };
+        });
+      } catch (error) {
+        console.error("Failed to load git status:", error);
+      }
+    },
+
+    discoverRepositories: async () => {
+      const rootPath = get().rootPath;
+      if (!rootPath) {
+        set({ repositories: [], activeRepositoryId: null });
+        return;
+      }
+      try {
+        const [worktreesRaw, submodulesRaw] = await Promise.all([
+          invoke<any[]>("git_discover_linked_worktrees", { rootDir: rootPath }),
+          invoke<any[]>("git_discover_submodules", { rootDir: rootPath }),
+        ]);
+        // git_discover_linked_worktrees already includes the main worktree
+        // (i.e. rootPath itself), so it alone covers the "workspace" entry --
+        // no separate git_discover_repository call is needed here.
+        const repositories = [...worktreesRaw, ...submodulesRaw].map(mapGitRepository);
+        set((state) => {
+          const activeStillPresent =
+            state.activeRepositoryId && repositories.some((repo) => repo.id === state.activeRepositoryId);
+          return {
+            repositories,
+            activeRepositoryId: activeStillPresent
+              ? state.activeRepositoryId
+              : repositories.find((repo) => repo.kind === "workspace")?.id ?? repositories[0]?.id ?? null,
+          };
+        });
+      } catch (error) {
+        console.error("Failed to discover git repositories:", error);
+      }
+    },
+
+    loadRepositoryGitStatus: async (repositoryId) => {
+      const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+      if (!repo) return;
+      try {
+        const result: any = await invoke("git_status", { rootDir: repo.worktreePath });
+        set((state) => ({
+          statusByRepositoryId: { ...state.statusByRepositoryId, [repositoryId]: mapGitStatusResult(result) },
+        }));
+      } catch (error) {
+        console.error(`Failed to load git status for repository ${repositoryId}:`, error);
+      }
+    },
+
+    initSubmodule: async (repositoryId) => {
+      const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+      const rootPath = get().rootPath;
+      if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+      await invoke("git_submodule_init", { rootDir: rootPath, submodulePath: repo.submodulePath });
+      await get().discoverRepositories();
+      await refreshSubmoduleAndParentStatus(repositoryId);
+    },
+
+    updateSubmodule: async (repositoryId, recursive) => {
+      const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+      const rootPath = get().rootPath;
+      if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+      await invoke("git_submodule_update", { rootDir: rootPath, submodulePath: repo.submodulePath, recursive });
+      await get().discoverRepositories();
+      await refreshSubmoduleAndParentStatus(repositoryId);
+    },
+
+    syncSubmodule: async (repositoryId) => {
+      const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+      const rootPath = get().rootPath;
+      if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+      await invoke("git_submodule_sync", { rootDir: rootPath, submodulePath: repo.submodulePath });
+      await get().discoverRepositories();
+      await refreshSubmoduleAndParentStatus(repositoryId);
+    },
+  };
+};

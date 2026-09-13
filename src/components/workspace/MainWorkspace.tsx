@@ -9,8 +9,10 @@ import styles from "./MainWorkspace.module.css";
  *
  * This wraps `Workspace.tsx`; it does not absorb it. `executeNode`/
  * `stopExecution` and the run map moved out of `Workspace` into
- * `agentRunCoordinator.ts` (REFACTOR_PLAN.md PR 7 commit 1); `Workspace`
- * still owns the close-intercept modals (commit 3 extracts those too).
+ * `agentRunCoordinator.ts` (REFACTOR_PLAN.md PR 7 commit 1); the close-
+ * intercept controller moved into `TabCloseInterceptPresenter.tsx`
+ * (commit 3). `Workspace` is now just the tab-strip/outlet wiring plus
+ * those two self-contained presenters.
  */
 export const MainWorkspace: React.FC = () => (
   <div className={styles.workspace}>

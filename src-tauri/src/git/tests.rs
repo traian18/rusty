@@ -370,3 +370,107 @@ async fn discover_repository_identifies_an_initialized_submodule_by_its_modules_
 
     assert_eq!(repo.kind, "submodule");
 }
+
+// ── PR 5a commit 5: recursive submodule discovery ────────────────────────
+
+#[tokio::test]
+async fn discover_submodules_finds_an_initialized_submodule() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+
+    assert_eq!(submodules.len(), 1);
+    let sub = &submodules[0];
+    assert_eq!(sub.kind, "submodule");
+    assert!(sub.initialized);
+    assert_eq!(sub.submodule_path.as_deref(), Some("sub"));
+    let parent_repo = discover_repository(&parent.path_str()).unwrap();
+    assert_eq!(sub.parent_id, Some(parent_repo.id));
+    // Fully discoverable since it's checked out: has its own real HEAD.
+    assert_eq!(sub.head.mode, "branch");
+}
+
+#[tokio::test]
+async fn discover_submodules_reports_an_uninitialized_submodule_without_a_working_tree() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+    parent.git_ok(&["submodule", "deinit", "-f", "sub"]);
+
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+
+    assert_eq!(submodules.len(), 1);
+    let sub = &submodules[0];
+    assert_eq!(sub.kind, "submodule");
+    assert!(!sub.initialized);
+    assert_eq!(sub.submodule_path.as_deref(), Some("sub"));
+    // The gitlink commit is still known even though nothing is checked out.
+    assert!(sub.head.oid.is_some());
+}
+
+#[tokio::test]
+async fn discover_submodules_finds_a_submodule_nested_inside_another_submodule() {
+    let innermost = GitFixture::init();
+    innermost.commit_file("leaf.md", "leaf\n", "innermost initial commit");
+
+    let middle = GitFixture::init();
+    middle.commit_file("a.txt", "one\n", "middle initial commit");
+    middle.add_submodule(std::path::Path::new(&innermost.path_str()), "inner");
+    middle.git_ok(&["commit", "-m", "add inner submodule"]);
+
+    let outer = GitFixture::init();
+    outer.commit_file("a.txt", "one\n", "outer initial commit");
+    outer.add_submodule(std::path::Path::new(&middle.path_str()), "outer-sub");
+    outer.git_ok(&["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    outer.git_ok(&["commit", "-m", "add outer-sub"]);
+
+    let submodules = discover_submodules(&outer.path_str()).unwrap();
+
+    assert_eq!(submodules.len(), 2, "expected both outer-sub and outer-sub/inner: {:?}", submodules.iter().map(|s| &s.submodule_path).collect::<Vec<_>>());
+    let outer_sub = submodules.iter().find(|s| s.submodule_path.as_deref() == Some("outer-sub")).expect("outer-sub not found");
+    let inner_sub = submodules.iter().find(|s| s.submodule_path.as_deref() == Some("outer-sub/inner")).expect("nested inner submodule not found");
+
+    let outer_repo = discover_repository(&outer.path_str()).unwrap();
+    assert_eq!(outer_sub.parent_id, Some(outer_repo.id));
+    // The nested submodule's parent is the OUTER SUBMODULE itself, not the
+    // top-level outer repository.
+    assert_eq!(inner_sub.parent_id, Some(outer_sub.id.clone()));
+    assert!(inner_sub.initialized);
+}
+
+#[tokio::test]
+async fn discover_submodules_cannot_see_a_nested_submodule_of_an_uninitialized_one() {
+    // Documents a real, accepted limitation: git submodule status --recursive
+    // itself cannot descend into an uninitialized submodule, so its own
+    // nested submodules are invisible until it is initialized.
+    let innermost = GitFixture::init();
+    innermost.commit_file("leaf.md", "leaf\n", "innermost initial commit");
+
+    let middle = GitFixture::init();
+    middle.commit_file("a.txt", "one\n", "middle initial commit");
+    middle.add_submodule(std::path::Path::new(&innermost.path_str()), "inner");
+    middle.git_ok(&["commit", "-m", "add inner submodule"]);
+
+    let outer = GitFixture::init();
+    outer.commit_file("a.txt", "one\n", "outer initial commit");
+    outer.add_submodule(std::path::Path::new(&middle.path_str()), "outer-sub");
+    outer.git_ok(&["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    outer.git_ok(&["commit", "-m", "add outer-sub"]);
+    outer.git_ok(&["submodule", "deinit", "-f", "outer-sub"]);
+
+    let submodules = discover_submodules(&outer.path_str()).unwrap();
+
+    assert_eq!(submodules.len(), 1, "expected only outer-sub itself, not its nested inner: {:?}", submodules.iter().map(|s| &s.submodule_path).collect::<Vec<_>>());
+    assert_eq!(submodules[0].submodule_path.as_deref(), Some("outer-sub"));
+    assert!(!submodules[0].initialized);
+}

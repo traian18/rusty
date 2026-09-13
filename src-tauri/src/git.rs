@@ -1325,6 +1325,122 @@ pub async fn git_discover_linked_worktrees(root_dir: String) -> Result<Vec<GitRe
     discover_linked_worktrees(&root_dir)
 }
 
+struct SubmoduleStatusEntry {
+    /// `false` for the `-` prefix (declared in .gitmodules and registered
+    /// as a gitlink, but never checked out).
+    initialized: bool,
+    /// The commit recorded in the parent's index/tree for this submodule --
+    /// present whether or not the submodule is checked out.
+    sha: String,
+    /// Relative to the repository `git submodule status --recursive` was
+    /// run against -- git itself prefixes nested paths (e.g.
+    /// "outer-sub/inner"), so this is already fully qualified.
+    relative_path: String,
+}
+
+/// Parses one line of `git submodule status --recursive` output. Verified
+/// directly against git 2.45.0: an in-sync/checked-out entry has a leading
+/// space before the sha (` <sha> <path> (<describe>)`); an uninitialized
+/// one has no leading space and no describe suffix at all
+/// (`-<sha> <path>`) since there is no checked-out ref to describe. The
+/// leading character is the ONLY thing distinguishing the two shapes --
+/// there is no other delimiter.
+fn parse_submodule_status_line(line: &str) -> Option<SubmoduleStatusEntry> {
+    let mut chars = line.chars();
+    let status_char = chars.next()?;
+    let rest: String = chars.collect();
+    let mut parts = rest.splitn(2, ' ');
+    let sha = parts.next()?.to_string();
+    let remainder = parts.next()?.trim();
+    let relative_path = remainder.split(" (").next().unwrap_or(remainder).trim().to_string();
+    if sha.is_empty() || relative_path.is_empty() {
+        return None;
+    }
+    Some(SubmoduleStatusEntry {
+        initialized: status_char != '-',
+        sha,
+        relative_path,
+    })
+}
+
+/// Recursively discovers every submodule of the repository at `root_dir`,
+/// as `GitRepository` entries (`kind: "submodule"`, `parent_id` set).
+///
+/// `git submodule status --recursive` alone is the authoritative source
+/// here -- it already cross-references `.gitmodules` internally (a
+/// submodule that is declared but was deinitialized still reports its `-`
+/// line, sha, and path), so there is no separate `.gitmodules` parsing
+/// step needed on top of it. It genuinely cannot see into an uninitialized
+/// submodule to find further nesting below it (verified directly: a nested
+/// submodule of an uninitialized one disappears from this output entirely
+/// until the outer one is initialized) -- an accepted, documented
+/// limitation rather than a bug, since there is nothing checked out there
+/// to descend into.
+pub fn discover_submodules(root_dir: &str) -> Result<Vec<GitRepository>, GitError> {
+    let root_repo = discover_repository(root_dir)?;
+    let output = run_git(root_dir, "git_discover_submodules", &["submodule", "status", "--recursive"])?;
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    let mut results = Vec::new();
+    for line in text.lines() {
+        let Some(entry) = parse_submodule_status_line(line) else { continue };
+        let full_path = Path::new(root_dir).join(&entry.relative_path);
+        let full_path_str = full_path.to_string_lossy().into_owned();
+
+        // A top-level entry's parent is root_dir itself; a nested one's
+        // ("outer-sub/inner") immediate parent is the outer submodule's own
+        // checked-out path -- which, since --recursive could only produce
+        // this line by having already descended into it, is guaranteed to
+        // already be initialized and therefore discoverable.
+        let parent_id = if entry.relative_path.contains('/') {
+            full_path
+                .parent()
+                .and_then(|p| discover_repository(&p.to_string_lossy()).ok())
+                .map(|r| r.id)
+                .unwrap_or_else(|| root_repo.id.clone())
+        } else {
+            root_repo.id.clone()
+        };
+
+        if entry.initialized {
+            if let Ok(mut repo) = discover_repository(&full_path_str) {
+                repo.kind = "submodule".to_string();
+                repo.parent_id = Some(parent_id);
+                repo.submodule_path = Some(entry.relative_path);
+                results.push(repo);
+            }
+            // If discover_repository fails despite git reporting this
+            // submodule as checked out, something is inconsistent enough
+            // (mid-operation, corrupted checkout) that silently skipping it
+            // is safer than fabricating a GitRepository for it.
+        } else {
+            results.push(GitRepository {
+                id: full_path_str.clone(),
+                worktree_path: full_path_str,
+                git_dir: String::new(),
+                kind: "submodule".to_string(),
+                parent_id: Some(parent_id),
+                submodule_path: Some(entry.relative_path),
+                initialized: false,
+                // Not really "unborn" in the no-commits-yet sense -- there
+                // is simply no working tree to report a HEAD for. `oid` is
+                // still the commit recorded in the parent's gitlink, which
+                // is meaningful even though nothing is checked out. A
+                // consumer should check `initialized` before reading `head`
+                // at all for a submodule entry.
+                head: GitHeadState { mode: "unborn".to_string(), branch: None, oid: Some(entry.sha) },
+            });
+        }
+    }
+    Ok(results)
+}
+
+/// Recursively discovers every submodule of the repository at `root_dir`.
+#[tauri::command]
+pub async fn git_discover_submodules(root_dir: String) -> Result<Vec<GitRepository>, GitError> {
+    discover_submodules(&root_dir)
+}
+
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]

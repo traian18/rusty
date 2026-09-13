@@ -1277,7 +1277,8 @@ pub fn run() {
             git::git_get_file_commit_history,
             git::git_scan_subprojects,
             git::git_discover_repository,
-            git::git_discover_linked_worktrees
+            git::git_discover_linked_worktrees,
+            git::git_discover_submodules
         ]);
 
     let app = builder

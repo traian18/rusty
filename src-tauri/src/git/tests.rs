@@ -549,3 +549,103 @@ fn parse_status_z_does_not_let_a_renames_extra_field_bleed_into_the_next_record(
     assert_eq!(unstaged[0].name, "untracked.txt");
     assert_eq!(unstaged[0].status_type, "untracked");
 }
+
+// ── PR 5a commit 10: worktree containment ────────────────────────────────
+//
+// Plain temp dirs, not GitFixture -- these test path containment, not any
+// git behavior, so the hermetic git-identity/signing setup GitFixture
+// exists for isn't needed here.
+
+#[test]
+fn validate_path_in_worktree_accepts_a_real_path_inside_the_root() {
+    let root = tempfile::TempDir::new().unwrap();
+    let file_path = root.path().join("a.txt");
+    std::fs::write(&file_path, "hi").unwrap();
+
+    let result = validate_path_in_worktree(&root.path().to_string_lossy(), &file_path.to_string_lossy());
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn validate_path_in_worktree_rejects_a_dot_dot_escape_that_strip_prefix_alone_would_miss() {
+    let root = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "top secret").unwrap();
+
+    // Confirms the exact vulnerability this commit closes: a plain
+    // Path::strip_prefix accepts this (it only compares leading
+    // components), but the escaping path resolves outside root.
+    let escaping_path = root.path().join("..").join(
+        outside.path().file_name().unwrap()
+    ).join("secret.txt");
+    assert!(
+        escaping_path.strip_prefix(root.path()).is_ok(),
+        "expected strip_prefix alone to (wrongly) accept this path, demonstrating the bug this commit fixes"
+    );
+
+    let result = validate_path_in_worktree(&root.path().to_string_lossy(), &escaping_path.to_string_lossy());
+
+    assert!(result.is_err(), "expected the ..-escaping path to be rejected");
+}
+
+#[test]
+fn validate_path_in_worktree_rejects_a_similarly_prefixed_sibling_directory() {
+    // The specific bug in git_blame/git_get_file_commit_history's old
+    // starts_with(&root_dir) check: "/repo" matches starts_with("/repo")
+    // against "/repository", a different directory entirely.
+    let parent = tempfile::TempDir::new().unwrap();
+    let root = parent.path().join("repo");
+    let sibling = parent.path().join("repository");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    let sibling_file = sibling.join("secret.txt");
+    std::fs::write(&sibling_file, "not yours").unwrap();
+
+    let result = validate_path_in_worktree(&root.to_string_lossy(), &sibling_file.to_string_lossy());
+
+    assert!(result.is_err(), "expected a similarly-prefixed sibling directory to be rejected");
+}
+
+#[test]
+fn validate_path_in_worktree_accepts_a_not_yet_existing_path_via_lexical_normalization() {
+    let root = tempfile::TempDir::new().unwrap();
+    let not_yet_created = root.path().join("new-file.txt");
+    assert!(!not_yet_created.exists());
+
+    let result = validate_path_in_worktree(&root.path().to_string_lossy(), &not_yet_created.to_string_lossy());
+
+    assert!(result.is_ok(), "expected a not-yet-existing path inside root to be accepted");
+}
+
+#[tokio::test]
+async fn git_undo_last_rename_rejects_a_new_path_outside_the_worktree() {
+    let root = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    let escaping_new_path = outside.path().join("evil.txt");
+    std::fs::write(&escaping_new_path, "moved here maliciously").unwrap();
+    let original_path = root.path().join("a.txt");
+
+    let result = git_undo_last_rename(
+        root.path().to_string_lossy().into_owned(),
+        original_path.to_string_lossy().into_owned(),
+        escaping_new_path.to_string_lossy().into_owned(),
+    ).await;
+
+    assert!(result.is_err(), "expected a new_path outside the worktree to be rejected");
+    // The file must NOT have been moved.
+    assert!(escaping_new_path.exists());
+    assert!(!original_path.exists());
+}
+
+#[tokio::test]
+async fn git_blame_works_normally_for_a_real_in_worktree_file() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\ntwo\n", "initial commit");
+
+    let file_path = std::path::Path::new(&fx.path_str()).join("a.txt");
+    let lines = git_blame(fx.path_str(), file_path.to_string_lossy().into_owned()).await.unwrap();
+
+    assert_eq!(lines.len(), 2);
+}

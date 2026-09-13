@@ -96,21 +96,106 @@ fn run_git(repo: &str, operation: &str, args: &[&str]) -> Result<std::process::O
     }
 }
 
+/// Lexically normalizes `path` (resolving `.`/`..` components without
+/// touching the filesystem) for the case `std::fs::canonicalize` can't
+/// handle: a path that doesn't exist yet (e.g. a file about to be
+/// created). `..` pops the last pushed component instead of being kept
+/// literally, which is exactly what closes the escape `strip_prefix` alone
+/// allowed: `Path::new("/repo/../../etc/passwd").strip_prefix("/repo")`
+/// SUCCEEDS (returns "../../etc/passwd") because `strip_prefix` only
+/// compares the leading components, not the ones after -- confirmed
+/// directly. Normalizing first means the final containment check below
+/// compares against where the path actually resolves, not just its
+/// leading components.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
+/// Resolves `path` as close to `std::fs::canonicalize` as possible even
+/// when it doesn't exist yet: normalizes `.`/`..` lexically first, then
+/// walks up to the nearest existing ancestor, canonicalizes THAT (so a
+/// symlinked ancestor -- e.g. macOS's `/var` -> `/private/var`, which is
+/// exactly what `tempfile::TempDir` returns, confirmed directly -- is
+/// still resolved), and rejoins the non-existent tail. Plain lexical
+/// normalization alone would leave an unresolved-symlink prefix that
+/// silently fails to `starts_with()`-match a canonicalized root even for
+/// a path that is genuinely inside it.
+fn resolve_best_effort(path: &Path) -> PathBuf {
+    if let Ok(canon) = std::fs::canonicalize(path) {
+        return canon;
+    }
+    let normalized = normalize_lexically(path);
+    let mut ancestor = normalized.as_path();
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(ancestor) {
+            let mut result = canon;
+            for component in tail.iter().rev() {
+                result.push(component);
+            }
+            return result;
+        }
+        match ancestor.parent() {
+            Some(parent) => {
+                if let Some(name) = ancestor.file_name() {
+                    tail.push(name);
+                }
+                ancestor = parent;
+            }
+            None => return normalized,
+        }
+    }
+}
+
+/// Confirms `path` resolves to somewhere inside `root`'s canonical form,
+/// returning the resolved absolute path. Replaces the non-canonicalizing
+/// `strip_prefix` checks scattered across this file (bypassable via `..`,
+/// per `normalize_lexically`'s doc comment) and the even weaker plain
+/// string `starts_with` checks in `git_blame`/`git_get_file_commit_history`
+/// (a real, separate bug: `"/repo"` matches `starts_with("/repo")` against
+/// `"/repository"`, confirmed by reading those two functions directly).
+/// `git_undo_last_rename` had no containment check of any kind before this
+/// -- it now gets one for the first time.
+///
+/// Scoped to `git.rs`'s own commands only (an explicit PR 5 decision):
+/// `lib.rs`'s general-purpose file commands (`read_file_disk` etc.) have
+/// the same gap but 23 call sites across 16 mostly-unrelated files, which
+/// is general filesystem-safety hardening, not "Git integration and
+/// submodule support" -- left out of this PR, recorded as a known,
+/// deliberate gap rather than silently absent.
+fn validate_path_in_worktree(root: &str, path: &str) -> Result<PathBuf, GitError> {
+    let root_canon = resolve_best_effort(Path::new(root));
+    let path_resolved = resolve_best_effort(Path::new(path));
+
+    if path_resolved.starts_with(&root_canon) {
+        Ok(path_resolved)
+    } else {
+        Err(GitError {
+            operation: "validate_path_in_worktree".to_string(),
+            repository: root.to_string(),
+            exit_code: None,
+            stderr: String::new(),
+            message: "File is not in the workspace root".to_string(),
+        })
+    }
+}
+
 /// Resolves `file_path` relative to `root_dir` for a git.rs command,
-/// returning a `GitError` naming that `operation` on the two failure modes
-/// shared by every command that takes a `(root_dir, file_path)` pair. This
-/// is the mechanical, non-canonicalizing check that already existed at each
-/// call site (a plain `strip_prefix`) -- PR 5a commit 10 replaces it with a
-/// canonicalizing containment primitive; this commit only removes the
-/// duplication, not the weakness.
+/// canonicalizing/normalizing both sides via `validate_path_in_worktree`
+/// before computing the relative path, so an out-of-root `file_path` is
+/// rejected rather than silently producing a `..`-escaping relative path
+/// for the git command that follows to act on.
 fn relative_to_root(root_dir: &str, file_path: &str, operation: &str) -> Result<String, GitError> {
-    let not_in_root = || GitError {
-        operation: operation.to_string(),
-        repository: root_dir.to_string(),
-        exit_code: None,
-        stderr: String::new(),
-        message: "File is not in the workspace root".to_string(),
-    };
     let bad_encoding = || GitError {
         operation: operation.to_string(),
         repository: root_dir.to_string(),
@@ -118,10 +203,15 @@ fn relative_to_root(root_dir: &str, file_path: &str, operation: &str) -> Result<
         stderr: String::new(),
         message: "Invalid file path encoding".to_string(),
     };
-    Path::new(file_path)
-        .strip_prefix(Path::new(root_dir))
-        .map_err(|_| not_in_root())?
-        .to_str()
+    let validated = validate_path_in_worktree(root_dir, file_path).map_err(|mut err| {
+        err.operation = operation.to_string();
+        err
+    })?;
+    let root_canon = resolve_best_effort(Path::new(root_dir));
+    validated
+        .strip_prefix(&root_canon)
+        .ok()
+        .and_then(|p| p.to_str())
         .map(|s| s.to_string())
         .ok_or_else(bad_encoding)
 }
@@ -744,11 +834,22 @@ pub async fn git_abort_pending(root_dir: String, operation: String) -> Result<()
 }
 
 /// Undoes a file move/rename by moving the file back to its original location.
-/// `root_dir` is currently unused for any containment check -- PR 5a commit
-/// 10 fixes this (today's only other callers of this pattern at least do a
-/// non-canonicalizing `strip_prefix`; this command does not even do that).
 #[tauri::command]
 pub async fn git_undo_last_rename(root_dir: String, original_path: String, new_path: String) -> Result<(), GitError> {
+    // Previously had no containment check of any kind -- every other
+    // (root_dir, file_path) command in this file at least did a
+    // non-canonicalizing strip_prefix. Both paths are validated: the
+    // destination (original_path) doesn't need to already exist, so
+    // validate_path_in_worktree's lexical-normalization fallback is what
+    // actually protects it.
+    validate_path_in_worktree(&root_dir, &new_path).map_err(|mut err| {
+        err.operation = "git_undo_last_rename".to_string();
+        err
+    })?;
+    validate_path_in_worktree(&root_dir, &original_path).map_err(|mut err| {
+        err.operation = "git_undo_last_rename".to_string();
+        err
+    })?;
     if !std::path::Path::new(&new_path).exists() {
         return Err(GitError {
             operation: "git_undo_last_rename".to_string(),
@@ -1062,13 +1163,12 @@ pub async fn git_blame(root_dir: String, file_path: String) -> Result<Vec<GitBla
         });
     }
 
-    let relative_path = if file_path.starts_with(&root_dir) {
-        let prefix_len = root_dir.len();
-        let stripped = &file_path[prefix_len..];
-        stripped.trim_start_matches('/').trim_start_matches('\\').to_string()
-    } else {
-        file_path
-    };
+    // Was a plain string starts_with(&root_dir) check -- a real bug fixed
+    // in PR 5a commit 10: "/repo" matches starts_with("/repo") against
+    // "/repository", a different directory entirely. relative_to_root
+    // canonicalizes/normalizes both sides and rejects an out-of-worktree
+    // path instead of silently computing a wrong relative path for it.
+    let relative_path = relative_to_root(&root_dir, &file_path, "git_blame")?;
 
     let output = run_git(&root_dir, "git_blame", &["blame", "-w", "--date=short", &relative_path])?;
 
@@ -1117,13 +1217,9 @@ pub async fn git_get_file_commit_history(root_dir: String, file_path: String) ->
         });
     }
 
-    let relative_path = if file_path.starts_with(&root_dir) {
-        let prefix_len = root_dir.len();
-        let stripped = &file_path[prefix_len..];
-        stripped.trim_start_matches('/').trim_start_matches('\\').to_string()
-    } else {
-        file_path
-    };
+    // Was a plain string starts_with(&root_dir) check -- see git_blame's
+    // comment above for the exact bug this fixes.
+    let relative_path = relative_to_root(&root_dir, &file_path, "git_get_file_commit_history")?;
 
     let log_output = match run_git(&root_dir, "git_get_file_commit_history", &[
         "log",

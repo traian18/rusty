@@ -24,6 +24,7 @@
 import { agentHarnessClient, RunEvent } from "./agentHarnessClient";
 import { commandPermissionService, handleCommandPermissionMessage, CommandPermissionSocket } from "./commandPermissionService";
 import { SIDECAR_PORT } from "../config/sidecar";
+import { isReadFileRpcRequest, isWriteFileRpcRequest, ReadFileRpcResponse, WriteFileRpcResponse } from "../../shared/agent-protocol";
 
 export interface EdgeReconciliationRequest {
   edgeId: string;
@@ -85,19 +86,19 @@ export const edgeReconciliationService = {
         callbacks.onUsage?.(event.usage);
         return;
       }
-      if (event.type === "read_file") {
+      if (isReadFileRpcRequest(event)) {
         void callbacks.onReadFile(String(event.path ?? ""))
-          .then((content) => agentHarnessClient.respondToRpc(event, { content }))
+          .then((content) => agentHarnessClient.respondToRpc(event, { content } satisfies ReadFileRpcResponse))
           .catch((error: unknown) =>
-            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) }),
+            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) } satisfies ReadFileRpcResponse),
           );
         return;
       }
-      if (event.type === "write_file") {
+      if (isWriteFileRpcRequest(event)) {
         void callbacks.onWriteFile(String(event.path ?? ""), String(event.content ?? ""))
-          .then(() => agentHarnessClient.respondToRpc(event, {}))
+          .then(() => agentHarnessClient.respondToRpc(event, {} satisfies WriteFileRpcResponse))
           .catch((error: unknown) =>
-            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) }),
+            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) } satisfies WriteFileRpcResponse),
           );
         return;
       }

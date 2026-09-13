@@ -1,7 +1,7 @@
 import path from "path";
 import { WebSocket } from "ws";
 import { resolveHarness } from "../services/harness";
-import { request, safeSend, validateRpcResponse } from "../services/websocket";
+import { request, safeSend, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
 import { createUsageReporter } from "../services/usageBroadcast";
 
 // Same rationale as globalExplore.ts/reconciliateEdge.ts: this capability's
@@ -276,7 +276,7 @@ export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void>
         type: "read_file",
         runId: reconciliationStreamId,
         payload: { path: resolvedPath },
-        validateResponse: validateRpcResponse,
+        validateResponse: validateReadFileRpcResponse,
       });
       if (res.error) throw new Error(String(res.error));
       return String(res.content ?? "");
@@ -287,7 +287,7 @@ export async function reconciliateGraph(ws: WebSocket, data: any): Promise<void>
         type: "write_file",
         runId: reconciliationStreamId,
         payload: { path: resolvedPath, content },
-        validateResponse: validateRpcResponse,
+        validateResponse: validateWriteFileRpcResponse,
       });
       if (res.error) throw new Error(String(res.error));
       finalizedFiles.add(resolvedPath);

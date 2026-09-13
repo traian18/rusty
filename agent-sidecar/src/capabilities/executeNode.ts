@@ -8,7 +8,7 @@
 
 import { WebSocket } from "ws";
 import path from "path";
-import { safeSend, request, validateRpcResponse } from "../services/websocket";
+import { safeSend, request, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { createMcpTools, McpServerConfig } from "../services/mcpClient";
 import { createLspTools } from "../services/lspTools";
@@ -71,7 +71,7 @@ export async function executeNode(ws: WebSocket, data: any): Promise<void> {
           type: "read_file",
           runId: nodeId,
           payload: { path: resolvedPath },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateReadFileRpcResponse,
         });
         if (res.error) {
           const errorMsg = String(res.error).toLowerCase();
@@ -108,7 +108,7 @@ export async function executeNode(ws: WebSocket, data: any): Promise<void> {
           type: "write_file",
           runId: nodeId,
           payload: { path: resolvedPath, content },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateWriteFileRpcResponse,
         });
         if (res.error) {
           console.error(`WebSocket [Server] write_file failed for: ${resolvedPath}`, res.error);

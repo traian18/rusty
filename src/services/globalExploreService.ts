@@ -14,6 +14,7 @@
 
 import { agentHarnessClient, RunEvent } from "./agentHarnessClient";
 import { SIDECAR_PORT } from "../config/sidecar";
+import { isReadFileRpcRequest, ReadFileRpcResponse } from "../../shared/agent-protocol";
 
 export interface GlobalExploreRequest {
   nodeId: string;
@@ -58,11 +59,11 @@ export const globalExploreService = {
         callbacks.onLog(String(event.message ?? ""));
         return;
       }
-      if (event.type === "read_file") {
+      if (isReadFileRpcRequest(event)) {
         void callbacks.onReadFile(String(event.path ?? ""))
-          .then((content) => agentHarnessClient.respondToRpc(event, { content }))
+          .then((content) => agentHarnessClient.respondToRpc(event, { content } satisfies ReadFileRpcResponse))
           .catch((error: unknown) =>
-            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) }),
+            agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) } satisfies ReadFileRpcResponse),
           );
         return;
       }

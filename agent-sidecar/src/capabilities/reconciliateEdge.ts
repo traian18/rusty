@@ -8,7 +8,7 @@
 
 import { WebSocket } from "ws";
 import path from "path";
-import { safeSend, request, validateRpcResponse } from "../services/websocket";
+import { safeSend, request, validateReadFileRpcResponse, validateWriteFileRpcResponse } from "../services/websocket";
 import { createListFilesTool, createSearchCodebaseTool } from "../services/tools";
 import { callLlmWithToolsPiStreaming } from "../services/llmRuntime";
 import { createUsageReporter } from "../services/usageBroadcast";
@@ -49,7 +49,7 @@ export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> 
           type: "read_file",
           runId: edgeId,
           payload: { path: resolvedPath },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateReadFileRpcResponse,
         });
         if (res.error) {
           const errorMsg = String(res.error).toLowerCase();
@@ -80,7 +80,7 @@ export async function reconciliateEdge(ws: WebSocket, data: any): Promise<void> 
           type: "write_file",
           runId: edgeId,
           payload: { path: resolvedPath, content },
-          validateResponse: validateRpcResponse,
+          validateResponse: validateWriteFileRpcResponse,
         });
         if (res.error) throw new Error(String(res.error));
         return `File successfully written to: ${resolvedPath}`;

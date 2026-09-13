@@ -23,6 +23,7 @@
 import { agentHarnessClient, RunEvent } from "./agentHarnessClient";
 import { commandPermissionService, handleCommandPermissionMessage, CommandPermissionSocket } from "./commandPermissionService";
 import { SIDECAR_PORT } from "../config/sidecar";
+import { isReadFileRpcRequest, isWriteFileRpcRequest, ReadFileRpcResponse, WriteFileRpcResponse } from "../../shared/agent-protocol";
 
 export interface GraphReconciliationRequest {
   tabId: string;
@@ -95,21 +96,21 @@ export const graphReconciliationService = {
           callbacks.onUsage?.(event.usage);
           return;
         }
-        if (event.type === "read_file") {
+        if (isReadFileRpcRequest(event)) {
           try {
             const content = await callbacks.onReadFile(String(event.path ?? ""));
-            await agentHarnessClient.respondToRpc(event, { content });
+            await agentHarnessClient.respondToRpc(event, { content } satisfies ReadFileRpcResponse);
           } catch (error: unknown) {
-            await agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) });
+            await agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) } satisfies ReadFileRpcResponse);
           }
           return;
         }
-        if (event.type === "write_file") {
+        if (isWriteFileRpcRequest(event)) {
           try {
             await callbacks.onWriteFile(String(event.path ?? ""), String(event.content ?? ""));
-            await agentHarnessClient.respondToRpc(event, {});
+            await agentHarnessClient.respondToRpc(event, {} satisfies WriteFileRpcResponse);
           } catch (error: unknown) {
-            await agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) });
+            await agentHarnessClient.respondToRpc(event, { error: error instanceof Error ? error.message : String(error) } satisfies WriteFileRpcResponse);
           }
           return;
         }

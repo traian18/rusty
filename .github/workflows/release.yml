@@ -103,6 +103,12 @@ jobs:
           xcrun stapler validate "src-tauri/target/release/bundle/macos/Rusty-IDE.app"
           spctl -a -vvv --type execute "src-tauri/target/release/bundle/macos/Rusty-IDE.app"
 
+      # release-windows.yml / release-linux.yml already fall back to `gh
+      # release upload` for this: all three release workflows fire off the
+      # same tag push, so whichever finishes first creates the release and
+      # the others must attach to it rather than fail on "already exists".
+      # This step never got that fallback when the other two were added
+      # (PR #3), which is exactly what made v0.1.18's release fail here.
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,7 +116,8 @@ jobs:
           gh release create "${{ github.ref_name }}" "$DMG_PATH" \
             --repo "${{ github.repository }}" \
             --title "Rusty-IDE ${{ github.ref_name }}" \
-            --notes "macOS build, signed with a Developer ID certificate and notarized by Apple. Apple Silicon (aarch64) only."
+            --notes "macOS build, signed with a Developer ID certificate and notarized by Apple. Apple Silicon (aarch64) only." \
+            || gh release upload "${{ github.ref_name }}" "$DMG_PATH" --clobber
 
       - name: Update Homebrew tap
         env:

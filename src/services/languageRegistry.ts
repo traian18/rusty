@@ -1,5 +1,7 @@
 /**
- * Single source of truth for language identity in Rusty.
+ * Single source of truth for language identity in Rusty (REFACTOR_PLAN.md
+ * PR 6) -- used by editor language selection, file icons (fileTypeService.tsx),
+ * inline chat's editor context, and LSP mapping.
  *
  * Two distinct "language" identifiers are in play:
  *
@@ -17,8 +19,11 @@
  * (lspKey) maintained two independent extension maps that drifted: .js/.jsx
  * mapped to monaco "javascript" but lsp "typescript", .sh to monaco "shell"
  * but lsp "bash", .lua/.cs had an lspKey but no monacoId at all (so providers
- * never fired). This module collapses both into one table so the two ids can
- * never disagree again.
+ * never fired). This module (formerly `lspLanguage.ts`) collapsed both into
+ * one table so the two ids can never disagree again -- PR 6 commit 1 is a
+ * pure rename/move, no behavior change; commit 2 folds fileTypeService.tsx's
+ * previously-independent icon-picking switch onto this same table too, and
+ * commit 3 expands language coverage on top of that.
  */
 
 /** Languages we ship a bundled/configured LSP server for. */

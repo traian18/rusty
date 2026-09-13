@@ -6,7 +6,7 @@ import { Save, RotateCcw, Trash2, ChevronLeft, ChevronRight } from "lucide-react
 import { useDiffViewMode } from "../../../hooks/useDiffViewMode";
 import { DiffViewToggle } from "../../ui/DiffViewToggle";
 import { useWorkspaceStore } from "../../../store";
-import { getMonacoLanguageId } from "../../../services/lspLanguage";
+import { getMonacoLanguageId } from "../../../services/languageRegistry";
 import { createMonacoDiffOptions } from "../../../editor/monacoOptions";
 
 interface DiffTabContentProps {

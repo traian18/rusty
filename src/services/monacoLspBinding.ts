@@ -1,5 +1,5 @@
 import { LspConnection, LspService, LspStatus } from "./lspService";
-import { getLspKeyFromMonacoId, isLspMonacoId } from "./lspLanguage";
+import { getLspKeyFromMonacoId, isLspMonacoId } from "./languageRegistry";
 import { useWorkspaceStore } from "../store";
 import {
   registerModelPath,

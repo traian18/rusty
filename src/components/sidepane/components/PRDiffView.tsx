@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { DiffViewToggle } from "../../ui/DiffViewToggle";
 import { notify } from "../../../notificationStore";
 import { CustomSelect } from "../../CustomSelect";
-import { getMonacoLanguageId } from "../../../services/lspLanguage";
+import { getMonacoLanguageId } from "../../../services/languageRegistry";
 import { useWorkspaceStore } from "../../../store";
 import { createMonacoDiffOptions } from "../../../editor/monacoOptions";
 

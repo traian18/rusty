@@ -1,5 +1,5 @@
 import React from "react";
-import { getMonacoLanguageId } from "./lspLanguage";
+import { getMonacoLanguageId } from "./languageRegistry";
 
 // --- 1. Custom SVG Branding Logos for Technologies ---
 
@@ -186,9 +186,10 @@ export interface FileTypeDetails {
 /**
  * Returns custom SVG icon component, CSS helper class, and Monaco language code based on filename extension.
  *
- * The `language` field is sourced from `lspLanguage.getMonacoLanguageId` so that
- * the Monaco model language id and the LSP server key can never drift apart
- * (see src/services/lspLanguage.ts). Icon selection stays here.
+ * The `language` field is sourced from `languageRegistry.getMonacoLanguageId`
+ * so that the Monaco model language id and the LSP server key can never
+ * drift apart (see src/services/languageRegistry.ts). Icon selection stays
+ * here for now -- PR 6 commit 2 folds it onto the same registry too.
  */
 export const getFileTypeDetails = (fileName: string): FileTypeDetails => {
   return { icon: iconForFile(fileName), color: "", language: getMonacoLanguageId(fileName) };

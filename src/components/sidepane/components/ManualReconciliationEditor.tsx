@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { ArrowLeftToLine, ChevronLeft, ChevronRight, Loader2, MessageSquareCode, RotateCcw, Save, Sparkles, UserRoundCheck } from "lucide-react";
 import { VfsRegistry } from "../../../services/vfs";
-import { getMonacoLanguageId } from "../../../services/lspLanguage";
+import { getMonacoLanguageId } from "../../../services/languageRegistry";
 import { CustomSelect } from "../../CustomSelect";
 import { InlineChat } from "../../inline-chat/InlineChat";
 import type { InlineChatEditorContext } from "../../../services/inlineChatService";

@@ -12,7 +12,7 @@ import { VfsRegistry } from "../../../services/vfs";
 import { Save, RotateCcw } from "lucide-react";
 import { useDiffViewMode } from "../../../hooks/useDiffViewMode";
 import { DiffViewToggle } from "../../ui/DiffViewToggle";
-import { getMonacoLanguageId } from "../../../services/lspLanguage";
+import { getMonacoLanguageId } from "../../../services/languageRegistry";
 import { useWorkspaceStore } from "../../../store";
 import { createMonacoDiffOptions } from "../../../editor/monacoOptions";
 

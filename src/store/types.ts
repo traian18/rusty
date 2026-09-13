@@ -356,7 +356,38 @@ export interface WorkspaceState {
   providerStatus: Record<ProviderId, ProviderStatus>;
   setProviderStatus: (id: ProviderId, entry: ProviderStatus) => void;
   patchProviderStatus: (id: ProviderId, patch: Partial<ProviderStatus>) => void;
+  /** @deprecated single-slot shim kept during the PR 5b migration (removed
+      once every consumer moves to statusByRepositoryId -- commit 21); still
+      the only source every existing consumer reads as of commit 15. */
   gitStatus: GitStatusResult | null;
+  /** All repositories discovered under the current rootPath: the workspace
+      root itself, its linked worktrees, and its submodules (recursively,
+      for initialized ones) -- REFACTOR_PLAN.md PR 5b commit 15. Empty until
+      discoverRepositories() has been called at least once for this
+      rootPath. */
+  repositories: GitRepository[];
+  /** Keyed by GitRepository.id. Populated lazily, per repository, by
+      loadRepositoryGitStatus -- unlike the deprecated single-slot
+      `gitStatus`, nothing eagerly loads every repository's status just
+      because discoverRepositories() ran. */
+  statusByRepositoryId: Record<string, GitStatusResult>;
+  /** The repository the Source Control UI (and anything scoped to "the
+      current repo") should act on. Not yet wired to any consumer as of
+      commit 15 -- SourceControl.tsx's own local activeRepo state moves
+      here in commit 16. */
+  activeRepositoryId: string | null;
+  setActiveRepositoryId: (id: string | null) => void;
+  /** Replaces the naive depth-3 filesystem walk (`scanSubprojects`,
+      backed by git_scan_subprojects/scan_git_subdirs) with real Git-native
+      discovery (git worktree list --porcelain + recursive submodule
+      status). Both commands and their still-current caller
+      (SourceControl.tsx's RepoSelector) are deleted in commit 16 once this
+      is wired up as the replacement. */
+  discoverRepositories: () => Promise<void>;
+  /** Loads git status for one discovered repository into
+      statusByRepositoryId, keyed by its id -- the per-repository
+      counterpart to the deprecated single-slot loadGitStatus. */
+  loadRepositoryGitStatus: (repositoryId: string) => Promise<void>;
   lastRename: { originalPath: string; newPath: string } | null;
   setLastRename: (rename: { originalPath: string; newPath: string } | null) => void;
   collapseAllTrigger?: number;

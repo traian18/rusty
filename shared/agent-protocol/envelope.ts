@@ -4,6 +4,10 @@
 //
 // Moved verbatim from the old shared/agentProtocol.ts (PR 4a) as the
 // first step of splitting that one file into shared/agent-protocol/.
+//
+// See SEMANTICS.md for what each envelope field (conversationId, runId,
+// messageId, correlationId, agentId/parentAgentId, sequence) identifies
+// and how they relate to one another.
 // ============================================================
 
 export const AGENT_PROTOCOL_VERSION = 2 as const;

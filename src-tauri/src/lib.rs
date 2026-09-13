@@ -737,26 +737,117 @@ struct ScoredSearchMatch {
     score: i64,
 }
 
+/// Result of `sniff_text_file`'s cheap safety classification
+/// (REFACTOR_PLAN.md PR 6): whether a file is safe to read as text, a
+/// binary file (should get an unsupported-file preview instead of Monaco),
+/// or over the caller's size cap (still openable, but the caller should
+/// force a safe read-only mode -- see `check_file_open_safety` below).
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileOpenSafety {
+    Safe,
+    Binary,
+    TooLarge { size_bytes: u64 },
+}
+
+/// Cheap file-safety classification: a `stat` plus a NUL-byte sniff of the
+/// first 1KB, no full read of the rest of the file -- shared by
+/// `search_project`'s own binary/size guard (below, via
+/// `read_and_check_text_file`) and `check_file_open_safety` (the editor's
+/// own pre-open check). `max_bytes` lets each caller apply its own cap:
+/// search_project's existing hardcoded 2MB, or the editor's
+/// user-configurable large-file threshold (added in a later PR 6 commit).
+fn sniff_text_file(path: &Path, max_bytes: u64) -> std::io::Result<FileOpenSafety> {
+    let metadata = std::fs::metadata(path)?;
+    if metadata.len() > max_bytes {
+        return Ok(FileOpenSafety::TooLarge { size_bytes: metadata.len() });
+    }
+
+    let mut file = std::fs::File::open(path)?;
+    use std::io::Read;
+    let mut buffer = [0u8; 1024];
+    let bytes_read = file.read(&mut buffer)?;
+    if buffer[..bytes_read].contains(&0) {
+        return Ok(FileOpenSafety::Binary);
+    }
+
+    Ok(FileOpenSafety::Safe)
+}
+
+/// search_project's own cap -- unchanged from before this was extracted
+/// into the shared `sniff_text_file`.
+const SEARCH_MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
 fn read_and_check_text_file(path: &Path) -> Option<String> {
-    if let Ok(metadata) = std::fs::metadata(path) {
-        // Skip files larger than 2MB
-        if metadata.len() > 2 * 1024 * 1024 {
-            return None;
+    match sniff_text_file(path, SEARCH_MAX_TEXT_FILE_BYTES) {
+        Ok(FileOpenSafety::Safe) => std::fs::read_to_string(path).ok(),
+        _ => None,
+    }
+}
+
+/// Cheap pre-open safety check for the Monaco editor path (REFACTOR_PLAN.md
+/// PR 6): a `stat` plus a first-1KB sniff only, no full read -- safe to
+/// call unconditionally before every file-tab open regardless of whether
+/// the VFS cache will ultimately serve the content instead. `max_bytes` is
+/// the user's configurable large-file threshold (default 5MB), not
+/// search_project's own unrelated 2MB cap.
+#[tauri::command]
+async fn check_file_open_safety(path: String, max_bytes: u64) -> Result<FileOpenSafety, String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+    sniff_text_file(&path_buf, max_bytes).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod file_open_safety_tests {
+    use super::{sniff_text_file, FileOpenSafety};
+    use std::io::Write;
+
+    #[test]
+    fn clean_text_under_the_cap_is_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clean.txt");
+        std::fs::write(&path, "hello, world\nsecond line\n").unwrap();
+
+        let result = sniff_text_file(&path, 1024 * 1024).unwrap();
+
+        assert!(matches!(result, FileOpenSafety::Safe), "expected Safe, got {:?}", result);
+    }
+
+    #[test]
+    fn a_nul_byte_in_the_first_1kb_is_reported_as_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image.png");
+        let mut file = std::fs::File::create(&path).unwrap();
+        // A real PNG-like byte sequence: the point is the embedded NUL,
+        // not authenticity of the format.
+        file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x00, 0x0D, 0x0A]).unwrap();
+
+        let result = sniff_text_file(&path, 1024 * 1024).unwrap();
+
+        assert!(matches!(result, FileOpenSafety::Binary), "expected Binary, got {:?}", result);
+    }
+
+    #[test]
+    fn a_file_over_the_cap_is_reported_as_too_large_without_being_sniffed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        // Clean text content -- if the size check didn't short-circuit
+        // before the NUL sniff, this would still (correctly) report Safe,
+        // which would make this test indistinguishable from the first one.
+        // The cap is set below the actual content length specifically to
+        // pin the TooLarge branch.
+        std::fs::write(&path, "a".repeat(2048)).unwrap();
+
+        let result = sniff_text_file(&path, 1024).unwrap();
+
+        match result {
+            FileOpenSafety::TooLarge { size_bytes } => assert_eq!(size_bytes, 2048),
+            other => panic!("expected TooLarge, got {:?}", other),
         }
     }
-
-    let mut file = std::fs::File::open(path).ok()?;
-    use std::io::{Read, Seek};
-    let mut buffer = [0; 1024];
-    let bytes_read = file.read(&mut buffer).ok()?;
-    if buffer[..bytes_read].contains(&0) {
-        return None; // Binary file detection
-    }
-
-    file.seek(std::io::SeekFrom::Start(0)).ok()?;
-    let mut content = String::new();
-    file.read_to_string(&mut content).ok()?;
-    Some(content)
 }
 
 #[tauri::command]
@@ -1236,6 +1327,7 @@ pub fn run() {
             import_vfs_tracker,
             get_directory_structure,
             read_file_disk,
+            check_file_open_safety,
             write_file_disk,
             create_file,
             create_directory,

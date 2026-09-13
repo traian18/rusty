@@ -13,6 +13,7 @@ import { MarkdownRenderer } from "../ui/MarkdownRenderer";
 import { InlineChat } from "../inline-chat/InlineChat";
 import { InlineChatEditorContext } from "../../services/inlineChatService";
 import { createMonacoEditorOptions } from "../../editor/monacoOptions";
+import { resolveRepositoryForPath } from "../git/resolveRepositoryForPath";
 
 const LSP_EDITOR_ENABLED = false;
 const DEFINITION_MENU_WIDTH = 360;
@@ -72,6 +73,16 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   const rootPath = useWorkspaceStore((state) => state.rootPath);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const revealFileInTree = useWorkspaceStore((state) => state.revealFileInTree);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+
+  // The repository that actually owns this file (REFACTOR_PLAN.md PR 5b
+  // commit 19) -- falls back to the workspace root, the pre-PR-5 behavior,
+  // when repositories hasn't been discovered yet or the file isn't inside
+  // any discovered submodule/worktree. Computed per-render rather than
+  // stored on the tab itself: repositories is already global store state,
+  // so there's nothing to gain from threading a repoPath field through
+  // every place a file tab gets created.
+  const fileRepoPath = resolveRepositoryForPath(tab.path, repositories)?.worktreePath ?? rootPath;
 
   const isMarkdown = getFileTypeDetails(tab.path).language === "markdown";
 
@@ -91,10 +102,10 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
   // Load Git blame details
   useEffect(() => {
-    if (!rootPath || !tab.path) return;
+    if (!fileRepoPath || !tab.path) return;
     const fetchBlame = async () => {
       try {
-        const blameLines: any[] = await invoke("git_blame", { rootDir: rootPath, filePath: tab.path });
+        const blameLines: any[] = await invoke("git_blame", { rootDir: fileRepoPath, filePath: tab.path });
         const map: Record<number, any> = {};
         let maxLen = 5;
         blameLines.forEach((line) => {
@@ -111,7 +122,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
       }
     };
     fetchBlame();
-  }, [tab.path, rootPath]);
+  }, [tab.path, fileRepoPath]);
 
   // Load content on mount
   useEffect(() => {
@@ -200,8 +211,13 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
   const handleOpenFileHistory = () => {
     // Repo-scoped now: the identity carries the repository, so the same file
-    // in two repositories no longer collides on one history tab.
-    openTab({ type: "git-history", path: tab.path });
+    // in two repositories no longer collides on one history tab. Passing
+    // fileRepoPath explicitly (found while auditing blame, PR 5b commit 19)
+    // fixes a real bug: omitting it left the git-history policy default to
+    // the workspace root regardless of which repository the file actually
+    // lives in, so history for a file inside a submodule opened scoped to
+    // the whole workspace instead.
+    openTab({ type: "git-history", path: tab.path, repoPath: fileRepoPath || undefined });
   };
 
   const scrollToLine = (editor: any, lineNum: number) => {

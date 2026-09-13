@@ -7,10 +7,10 @@ import styles from "./MainWorkspace.module.css";
  * The workspace region's layout owner: the card that hosts the tab strip,
  * tab outlet and the collapsible bottom terminal.
  *
- * This wraps `Workspace.tsx`; it does not absorb it. `Workspace` still owns
- * executeNode/stopExecution, the agent sockets, and the close-intercept
- * modals -- hoisting those into an application service is PR 7's
- * AgentRunCoordinator, not this one.
+ * This wraps `Workspace.tsx`; it does not absorb it. `executeNode`/
+ * `stopExecution` and the run map moved out of `Workspace` into
+ * `agentRunCoordinator.ts` (REFACTOR_PLAN.md PR 7 commit 1); `Workspace`
+ * still owns the close-intercept modals (commit 3 extracts those too).
  */
 export const MainWorkspace: React.FC = () => (
   <div className={styles.workspace}>

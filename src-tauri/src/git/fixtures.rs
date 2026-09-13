@@ -255,16 +255,6 @@ impl GitFixture {
             empty_hooks_dir: self.empty_hooks_dir.clone(),
         }
     }
-
-    /// Creates a second, independent repository nested inside this one's
-    /// working tree (not registered as a submodule) -- used to exercise
-    /// git_scan_subprojects. Cleanup is owned entirely by this fixture's
-    /// own TempDir; the returned GitFixture does not own a TempDir itself.
-    pub fn nested_repo(&self, rel: &str) -> GitFixture {
-        let nested_root = self.root.path().join(rel);
-        std::fs::create_dir_all(&nested_root).expect("failed to create nested repo dir");
-        GitFixture::init_at(Root::Nested(nested_root), &["init"])
-    }
 }
 
 /// Smoke tests for the fixture builders themselves (not any git.rs

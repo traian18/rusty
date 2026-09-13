@@ -37,10 +37,23 @@ const SourceControl: React.FC = () => {
   const openTab = useWorkspaceStore((state) => state.openTab);
   const lastRename = useWorkspaceStore((state) => state.lastRename);
   const setLastRename = useWorkspaceStore((state) => state.setLastRename);
+  const repositories = useWorkspaceStore((state) => state.repositories);
+  const activeRepositoryId = useWorkspaceStore((state) => state.activeRepositoryId);
+  const setActiveRepositoryId = useWorkspaceStore((state) => state.setActiveRepositoryId);
+  const discoverRepositories = useWorkspaceStore((state) => state.discoverRepositories);
+
+  // `activeRepo`/`subprojects` used to be local component state, populated
+  // by the naive `scanSubprojects()` filesystem walk (REFACTOR_PLAN.md PR
+  // 5b commit 16) -- both now derive from the store's Git-native
+  // `repositories`/`activeRepositoryId`, which `discoverRepositories()`
+  // populates below. `activeRepo` still resolves to a plain worktree path
+  // string, since every call site below (gitPresenter, invoke, openTab)
+  // takes a rootDir string, not a repository id.
+  const activeRepository = repositories.find((repo) => repo.id === activeRepositoryId) ?? null;
+  const activeRepo = activeRepository?.worktreePath ?? rootPath;
+  const subprojects = repositories.map((repo) => repo.worktreePath);
 
   // ── Local State ────────────────────────────────────────────
-  const [activeRepo, setActiveRepo] = useState<string>("");
-  const [subprojects, setSubprojects] = useState<string[]>([]);
   const [commitMsg, setCommitMsg] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
@@ -75,21 +88,12 @@ const SourceControl: React.FC = () => {
 
   // ── Effects ────────────────────────────────────────────────
 
-  /** Scan for subproject Git repositories when rootPath changes. */
+  /** Discover Git repositories (workspace root, linked worktrees,
+      submodules) when rootPath changes. */
   useEffect(() => {
     if (!rootPath) return;
-
-    setActiveRepo(rootPath);
-    gitPresenter
-      .scanSubprojects(rootPath)
-      .then((repos) => {
-        const list = Array.from(new Set([rootPath, ...repos]));
-        setSubprojects(list);
-      })
-      .catch((err) => {
-        console.error("Failed to scan subprojects:", err);
-      });
-  }, [rootPath]);
+    discoverRepositories();
+  }, [rootPath, discoverRepositories]);
 
   /** Fetch local and remote branches from the Tauri backend. */
   const loadBranches = useCallback(
@@ -490,9 +494,13 @@ const SourceControl: React.FC = () => {
   );
 
   /** Switch the active repository. */
-  const handleRepoChange = useCallback((repo: string): void => {
-    setActiveRepo(repo);
-  }, []);
+  const handleRepoChange = useCallback(
+    (repo: string): void => {
+      const match = repositories.find((candidate) => candidate.worktreePath === repo);
+      setActiveRepositoryId(match ? match.id : null);
+    },
+    [repositories, setActiveRepositoryId],
+  );
 
   // ── Early Returns (Empty / Non-Repo States) ───────────────
 

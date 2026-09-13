@@ -161,37 +161,6 @@ async fn git_get_commit_files_lists_files_for_a_root_commit() {
     assert_eq!(files[0].status_type, "added");
 }
 
-#[tokio::test]
-async fn git_scan_subprojects_finds_shallow_nested_repo() {
-    let fx = GitFixture::init();
-    let nested = fx.nested_repo("packages/nested");
-    nested.commit_file("readme.md", "hi\n", "init nested");
-
-    let results = git_scan_subprojects(fx.path_str()).await.unwrap();
-
-    assert!(
-        results.iter().any(|p| p.ends_with("packages/nested") || p.ends_with("packages\\nested")),
-        "expected to find the nested repo, got: {:?}",
-        results
-    );
-}
-
-#[tokio::test]
-async fn git_scan_subprojects_skips_ignored_directory_names() {
-    let fx = GitFixture::init();
-    fx.commit_file("a.txt", "one\n", "initial commit");
-    let ignored = fx.nested_repo("node_modules/some-pkg");
-    ignored.commit_file("readme.md", "hi\n", "init ignored");
-
-    let results = git_scan_subprojects(fx.path_str()).await.unwrap();
-
-    assert!(
-        !results.iter().any(|p| p.contains("node_modules")),
-        "expected node_modules to be skipped entirely, got: {:?}",
-        results
-    );
-}
-
 #[test]
 fn git_error_serializes_to_the_documented_json_shape() {
     // PR 5a commit 2: confirms GitError's wire shape end-to-end before the

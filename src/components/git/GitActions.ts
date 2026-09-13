@@ -34,5 +34,4 @@ export interface GitActions {
   rebaseBranch: (rootDir: string, branchName: string) => Promise<void>;
   abortPending: (rootDir: string) => Promise<void>;
   undoLastRename: (rootDir: string, originalPath: string, newPath: string) => Promise<void>;
-  scanSubprojects: (rootDir: string) => Promise<string[]>; // Returns list of subproject git root dirs
 }

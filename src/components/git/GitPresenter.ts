@@ -266,13 +266,4 @@ export const gitPresenter: GitActions = {
       throw err;
     }
   },
-
-  async scanSubprojects(rootDir: string): Promise<string[]> {
-    try {
-      return await invoke<string[]>("git_scan_subprojects", { rootDir });
-    } catch (err) {
-      console.error("Failed to scan git subprojects:", err);
-      return [];
-    }
-  },
 };

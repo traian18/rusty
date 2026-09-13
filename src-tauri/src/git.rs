@@ -1267,54 +1267,6 @@ pub async fn git_get_file_commit_history(root_dir: String, file_path: String) ->
     Ok(history)
 }
 
-/// Scans the workspace directory recursively to find subprojects (directories containing a `.git` sub-folder).
-#[tauri::command]
-pub async fn git_scan_subprojects(root_dir: String) -> Result<Vec<String>, GitError> {
-    let root_path = Path::new(&root_dir);
-    if !root_path.exists() {
-        return Err(GitError {
-            operation: "git_scan_subprojects".to_string(),
-            repository: root_dir,
-            exit_code: None,
-            stderr: String::new(),
-            message: "Directory does not exist".to_string(),
-        });
-    }
-    let mut results = Vec::new();
-    // Recursively scan up to depth 3
-    scan_git_subdirs(root_path, &mut results, 0);
-    Ok(results)
-}
-
-fn scan_git_subdirs(dir: &Path, results: &mut Vec<String>, depth: usize) {
-    if depth > 3 {
-        return;
-    }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = entry.file_name();
-                    if name == "node_modules"
-                        || name == "target"
-                        || name == "dist"
-                        || name == ".vscode"
-                        || name == ".gemini"
-                        || name == ".git"
-                    {
-                        continue;
-                    }
-                    if path.join(".git").exists() {
-                        results.push(path.to_string_lossy().into_owned());
-                    }
-                    scan_git_subdirs(&path, results, depth + 1);
-                }
-            }
-        }
-    }
-}
-
 /// The branch/detached/unborn tri-state of a repository's `HEAD`, replacing
 /// the old `current_branch: String` field's collapsed representation
 /// (detached returned the literal string `"HEAD"`; unborn fell back to a

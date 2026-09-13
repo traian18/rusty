@@ -377,12 +377,11 @@ export interface WorkspaceState {
       here in commit 16. */
   activeRepositoryId: string | null;
   setActiveRepositoryId: (id: string | null) => void;
-  /** Replaces the naive depth-3 filesystem walk (`scanSubprojects`,
-      backed by git_scan_subprojects/scan_git_subdirs) with real Git-native
-      discovery (git worktree list --porcelain + recursive submodule
-      status). Both commands and their still-current caller
-      (SourceControl.tsx's RepoSelector) are deleted in commit 16 once this
-      is wired up as the replacement. */
+  /** Replaces the naive depth-3 filesystem walk (`scanSubprojects`, backed
+      by the now-deleted git_scan_subprojects/scan_git_subdirs) with real
+      Git-native discovery (git worktree list --porcelain + recursive
+      submodule status). Wired up as SourceControl.tsx's RepoSelector
+      source in commit 16. */
   discoverRepositories: () => Promise<void>;
   /** Loads git status for one discovered repository into
       statusByRepositoryId, keyed by its id -- the per-repository

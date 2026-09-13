@@ -101,6 +101,31 @@ async function post<T>(path: string, provider: CustomProvider): Promise<T> {
   });
 }
 
+/**
+ * Named, swappable interface for the LLM-provider integration HTTP surface --
+ * the separation from the agent WebSocket protocol already existed (this
+ * whole module talks to SIDECAR_HTTP_URL, never the agent WebSocket's
+ * SIDECAR_WS_URL), this just gives that existing separation a name so a
+ * caller can depend on the interface rather than the concrete object below,
+ * and a test or future alternate implementation has a contract to satisfy.
+ * llmIntegrationService's shape is checked against this via `satisfies`,
+ * with no change to its existing implementation.
+ */
+export interface IntegrationControlPlane {
+  discoverModels(provider: CustomProvider): Promise<ProviderModel[]>;
+  testConnection(provider: CustomProvider): Promise<{ modelCount: number; supportedModelCount: number }>;
+  getQuota(provider: CustomProvider): Promise<ProviderQuotaSnapshot>;
+  getCopilotStatus(): Promise<CopilotConnectionStatus>;
+  startCopilotLogin(): Promise<CopilotConnectionStatus>;
+  logoutCopilot(): Promise<CopilotConnectionStatus>;
+  getCodexStatus(): Promise<CodexConnectionStatus>;
+  startCodexLogin(): Promise<CodexConnectionStatus>;
+  logoutCodex(): Promise<CodexConnectionStatus>;
+  getClaudeCodeStatus(): Promise<ClaudeCodeConnectionStatus>;
+  startClaudeCodeLogin(): Promise<ClaudeCodeConnectionStatus>;
+  logoutClaudeCode(): Promise<ClaudeCodeConnectionStatus>;
+}
+
 export const llmIntegrationService = {
   async discoverModels(provider: CustomProvider): Promise<ProviderModel[]> {
     const result = await post<{ models: ProviderModel[] }>("/llm/models", provider);
@@ -158,4 +183,4 @@ export const llmIntegrationService = {
   async logoutClaudeCode(): Promise<ClaudeCodeConnectionStatus> {
     return request<ClaudeCodeConnectionStatus>("/llm/claude-code/logout", { method: "POST" });
   },
-};
+} satisfies IntegrationControlPlane;

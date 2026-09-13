@@ -5,13 +5,17 @@
 # for notarization: Apple rejects the app if any embedded executable is
 # unsigned, ad-hoc signed, or missing the hardened runtime / timestamp.
 #
-# Claude and Copilot additionally need the JIT entitlements in
-# runtime-entitlements.plist: without them, their bundled JS engines (Bun,
-# V8) can't reserve executable memory under hardened runtime and crash as
-# soon as they're invoked (confirmed via "SharedArrayBuffer is not defined"
-# and "Failed to reserve virtual memory for CodeRange" respectively). This
-# runs once, before Tauri's own build/notarize step, which never re-signs
-# these files afterward - so there's exactly one signing pass.
+# Claude, Copilot, and the bundled rusty-node runtime itself additionally
+# need the JIT entitlements in runtime-entitlements.plist: without them,
+# their JIT-compiled JS engines (Bun, V8, and rusty-node's own V8) can't
+# reserve executable memory under hardened runtime and crash as soon as
+# they're invoked (confirmed via "SharedArrayBuffer is not defined" and
+# "Failed to reserve virtual memory for CodeRange" for Claude/Copilot;
+# rusty-node's own V8 fails the exact same way, which is what made every
+# v0.1.18 sidecar health check fail on a real signed/notarized install even
+# though it worked fine from an unsigned local dev build). This runs once,
+# before Tauri's own build/notarize step, which never re-signs these files
+# afterward - so there's exactly one signing pass.
 set -euo pipefail
 
 TARGET_DIR="$1"
@@ -31,7 +35,8 @@ fi
 needs_runtime_entitlements() {
   case "$1" in
     */@anthropic-ai/claude-agent-sdk-darwin-*/claude | \
-    */@github/copilot-darwin-*/copilot)
+    */@github/copilot-darwin-*/copilot | \
+    */rusty-node)
       return 0
       ;;
   esac

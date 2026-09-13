@@ -27,6 +27,29 @@ export interface RunHandle {
   subscribe: (listener: RunEventListener) => Unsubscribe;
 }
 
+/**
+ * The raw socket surface AgentHarnessClient actually uses -- deliberately
+ * narrower than a full connect/send/subscribe/disconnect protocol-level
+ * transport (see REFACTOR_PLAN.md PR 4c's notes on this). The client keeps
+ * every line of its own handshake, sequencing, and reconnection logic;
+ * this interface only lets that logic be driven by something other than a
+ * real `WebSocket` (e.g. an in-memory fake in tests). A real `WebSocket`
+ * already structurally satisfies this, so the default construction path
+ * needs no adapter.
+ */
+export interface AgentTransport {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- `any` (not
+  // `unknown`) is required here so a real WebSocket's own more specific
+  // handler types (e.g. `(ev: Event) => any`) remain structurally assignable.
+  onopen: ((event: any) => void) | null;
+  onmessage: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onclose: ((event: any) => void) | null;
+}
+
 export class AgentHarnessClientError extends Error {
   constructor(public readonly code: string, message: string, options?: { cause?: unknown }) {
     super(message);
@@ -37,13 +60,13 @@ export class AgentHarnessClientError extends Error {
 
 export interface AgentHarnessClientOptions {
   endpoint?: string;
-  createWebSocket?: (url: string) => WebSocket;
+  createWebSocket?: (url: string) => AgentTransport;
   handshakeTimeoutMs?: number;
   maxReconnectAttempts?: number;
 }
 
 export class AgentHarnessClient {
-  private socket?: WebSocket;
+  private socket?: AgentTransport;
   private state: ConnectionState = "disconnected";
   private connectPromise?: Promise<void>;
   private reconnectAttempt = 0;
@@ -57,13 +80,15 @@ export class AgentHarnessClient {
   private connectionId = "";
 
   private readonly endpoint: string;
-  private readonly createWebSocket: (url: string) => WebSocket;
+  private readonly createWebSocket: (url: string) => AgentTransport;
   private readonly handshakeTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
 
   constructor(options: AgentHarnessClientOptions = {}) {
     this.endpoint = options.endpoint || SIDECAR_WS_URL;
     this.createWebSocket = options.createWebSocket || ((url) => new WebSocket(url));
+    // A real WebSocket already structurally satisfies AgentTransport (send,
+    // close, readyState, on{open,message,error,close}) -- no adapter needed.
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 5_000;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 6;
   }

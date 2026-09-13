@@ -1278,7 +1278,10 @@ pub fn run() {
             git::git_scan_subprojects,
             git::git_discover_repository,
             git::git_discover_linked_worktrees,
-            git::git_discover_submodules
+            git::git_discover_submodules,
+            git::git_submodule_init,
+            git::git_submodule_update,
+            git::git_submodule_sync
         ]);
 
     let app = builder

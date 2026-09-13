@@ -772,3 +772,130 @@ async fn git_push_sets_the_upstream_automatically_when_the_current_branch_has_no
     let upstream = fx.git_ok(&["rev-parse", "--abbrev-ref", "main@{upstream}"]);
     assert_eq!(upstream, "origin/main");
 }
+
+// ── PR 5a commit 13: submodule action commands ───────────────────────────
+
+#[tokio::test]
+async fn git_submodule_init_registers_locally_without_cloning_content() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+    parent.git_ok(&["submodule", "deinit", "-f", "sub"]);
+
+    let result = git_submodule_init(parent.path_str(), "sub".to_string()).await;
+
+    assert!(result.is_ok());
+    // Registered locally (init doesn't fail/no-op), but NOT cloned --
+    // the submodule discovery should still report it as uninitialized.
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+    assert!(!submodules[0].initialized, "expected init alone to not clone the submodule's content");
+}
+
+#[tokio::test]
+async fn git_submodule_update_clones_a_never_initialized_submodule() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+    parent.git_ok(&["submodule", "deinit", "-f", "sub"]);
+
+    let result = git_submodule_update(parent.path_str(), "sub".to_string(), false).await;
+
+    assert!(result.is_ok(), "expected update --init to clone the submodule, got: {:?}", result.err());
+    let submodules = discover_submodules(&parent.path_str()).unwrap();
+    assert!(submodules[0].initialized);
+    assert!(std::path::Path::new(&parent.path_str()).join("sub").join("readme.md").exists());
+}
+
+#[tokio::test]
+async fn git_submodule_update_recursive_also_clones_nested_submodules() {
+    let innermost = GitFixture::init();
+    innermost.commit_file("leaf.md", "leaf\n", "innermost initial commit");
+
+    let middle = GitFixture::init();
+    middle.commit_file("a.txt", "one\n", "middle initial commit");
+    middle.add_submodule(std::path::Path::new(&innermost.path_str()), "inner");
+    middle.git_ok(&["commit", "-m", "add inner submodule"]);
+
+    let outer = GitFixture::init();
+    outer.commit_file("a.txt", "one\n", "outer initial commit");
+    outer.add_submodule(std::path::Path::new(&middle.path_str()), "outer-sub");
+    outer.git_ok(&["commit", "-m", "add outer-sub"]);
+    outer.git_ok(&["submodule", "deinit", "-f", "outer-sub"]);
+
+    let result = git_submodule_update(outer.path_str(), "outer-sub".to_string(), true).await;
+
+    assert!(result.is_ok(), "expected recursive update --init to succeed, got: {:?}", result.err());
+    let nested_leaf = std::path::Path::new(&outer.path_str()).join("outer-sub").join("inner").join("leaf.md");
+    assert!(nested_leaf.exists(), "expected --recursive to also clone the nested inner submodule");
+}
+
+#[tokio::test]
+async fn git_submodule_sync_updates_the_local_url_after_gitmodules_changes() {
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+
+    // Simulate the submodule's URL moving: edit .gitmodules directly (as a
+    // user would after relocating the upstream repository).
+    let new_source = GitFixture::init();
+    new_source.commit_file("readme.md", "hi from new location\n", "new source initial commit");
+    parent.write(".gitmodules", &format!(
+        "[submodule \"sub\"]\n\tpath = sub\n\turl = {}\n",
+        new_source.path_str()
+    ));
+
+    let result = git_submodule_sync(parent.path_str(), "sub".to_string()).await;
+
+    assert!(result.is_ok());
+    let configured_url = parent.git_ok(&["config", "--get", "submodule.sub.url"]);
+    assert_eq!(configured_url, new_source.path_str());
+}
+
+#[tokio::test]
+async fn staging_a_submodules_changed_gitlink_reuses_git_stage_file() {
+    // Confirms the plan's own decision that gitlink staging needs no new
+    // command: git_stage_file, applied to the submodule's own path, already
+    // stages a changed gitlink the same way it stages an ordinary file.
+    let source = GitFixture::init();
+    source.commit_file("readme.md", "hi\n", "source initial commit");
+
+    let parent = GitFixture::init();
+    parent.commit_file("a.txt", "one\n", "parent initial commit");
+    parent.add_submodule(std::path::Path::new(&source.path_str()), "sub");
+    parent.git_ok(&["commit", "-m", "add sub"]);
+
+    let submodule_dir = std::path::Path::new(&parent.path_str()).join("sub");
+    std::fs::write(submodule_dir.join("readme.md"), "committed change\n").unwrap();
+    let commit_in_sub = std::process::Command::new("git")
+        .args([
+            "-c", "user.name=Rusty Test",
+            "-c", "user.email=test@rusty.invalid",
+            "-c", "commit.gpgsign=false",
+            "commit", "-am", "change in sub",
+        ])
+        .current_dir(&submodule_dir)
+        .output()
+        .unwrap();
+    assert!(commit_in_sub.status.success());
+
+    let submodule_path_arg = submodule_dir.to_string_lossy().into_owned();
+    let result = git_stage_file(parent.path_str(), submodule_path_arg).await;
+
+    assert!(result.is_ok(), "expected git_stage_file to stage the submodule's changed gitlink, got: {:?}", result.err());
+    let status = git_status(parent.path_str()).await.unwrap();
+    assert_eq!(status.staged.len(), 1);
+    assert_eq!(status.staged[0].name, "sub");
+    assert!(status.unstaged.is_empty(), "expected the gitlink change to be fully staged, not split staged/unstaged");
+}

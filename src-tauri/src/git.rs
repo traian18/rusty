@@ -1655,6 +1655,56 @@ pub async fn git_discover_submodules(root_dir: String) -> Result<Vec<GitReposito
     discover_submodules(&root_dir)
 }
 
+/// Registers the submodule at `submodule_path` locally (copies its URL from
+/// `.gitmodules` into local config) WITHOUT cloning its content -- the
+/// first half of what `git submodule update --init` does in one step.
+/// Exposed separately since REFACTOR_PLAN.md's checklist names
+/// "initialize-submodule" and "update-submodule" as two distinct actions;
+/// `git_submodule_update` below already includes `--init`, so calling this
+/// first is optional, not required, before calling that.
+#[tauri::command]
+pub async fn git_submodule_init(root_dir: String, submodule_path: String) -> Result<(), GitError> {
+    run_git(&root_dir, "git_submodule_init", &["submodule", "init", "--", &submodule_path])?;
+    Ok(())
+}
+
+/// Clones (if needed) and checks out the submodule at `submodule_path` to
+/// the commit recorded in the parent's index, optionally recursing into
+/// its own submodules. `--init` is always included so this alone is
+/// sufficient for a never-initialized submodule -- matching
+/// `git submodule update --init`'s own behavior, and mirroring how
+/// `GitFixture::add_submodule`'s own doc comment already documents that
+/// `-c protocol.file.allow=always` (not local repo config) is what a
+/// local-path submodule clone actually needs to succeed.
+#[tauri::command]
+pub async fn git_submodule_update(root_dir: String, submodule_path: String, recursive: bool) -> Result<(), GitError> {
+    let mut args = vec!["-c", "protocol.file.allow=always", "submodule", "update", "--init"];
+    if recursive {
+        args.push("--recursive");
+    }
+    args.push("--");
+    args.push(&submodule_path);
+    run_git(&root_dir, "git_submodule_update", &args)?;
+    Ok(())
+}
+
+/// Syncs the submodule's locally-configured URL to match what
+/// `.gitmodules` currently declares -- needed after `.gitmodules` itself
+/// changes a submodule's URL (e.g. a repository moved), since a checked-out
+/// submodule otherwise keeps using the URL it was originally cloned with.
+#[tauri::command]
+pub async fn git_submodule_sync(root_dir: String, submodule_path: String) -> Result<(), GitError> {
+    run_git(&root_dir, "git_submodule_sync", &["submodule", "sync", "--", &submodule_path])?;
+    Ok(())
+}
+
+// Gitlink staging (recording a submodule's new checked-out commit in the
+// parent's index after committing inside it) needs no new command at all --
+// verified directly that `git add <submodule-path>` (i.e. the EXISTING
+// git_stage_file, called with the submodule's own path as file_path)
+// already stages a changed gitlink correctly, the same way it stages an
+// ordinary modified file. PR 5b's gitlink-staging UI reuses git_stage_file.
+
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]

@@ -16,6 +16,9 @@ interface RepoSelectorProps {
 
 interface BranchWidgetProps {
   gitStatus: GitStatusResult;
+  headLabel: string;
+  disableBranchOnlyActions: boolean;
+  branchOnlyActionsReason?: string;
   localBranches: string[];
   remoteBranches: string[];
   showBranchPopover: boolean;
@@ -33,6 +36,13 @@ interface SourceControlHeaderProps {
   activeRepo: string;
   rootPath: string;
   gitStatus: GitStatusResult | null;
+  /** The active repository's real HEAD label (REFACTOR_PLAN.md PR 5b
+      commit 22) -- replaces the branch pill's old
+      `gitStatus.currentBranch` read, which couldn't represent a detached
+      or unborn HEAD correctly. */
+  headLabel: string;
+  disableBranchOnlyActions: boolean;
+  branchOnlyActionsReason?: string;
   localBranches: string[];
   remoteBranches: string[];
   showBranchPopover: boolean;
@@ -94,6 +104,9 @@ const RepoSelector: React.FC<RepoSelectorProps> = ({
  */
 const BranchWidget: React.FC<BranchWidgetProps> = ({
   gitStatus,
+  headLabel,
+  disableBranchOnlyActions,
+  branchOnlyActionsReason,
   localBranches,
   remoteBranches,
   showBranchPopover,
@@ -111,15 +124,18 @@ const BranchWidget: React.FC<BranchWidgetProps> = ({
         type="button"
         onClick={onTogglePopover}
         className="flex items-center space-x-1 bg-[var(--accent-bg)]/35 text-[var(--accent-color)] px-2 py-1 rounded font-mono text-[10px] border border-[var(--accent-color)]/25 hover:border-[var(--accent-color)]/50 transition-all cursor-pointer font-bold"
+        title={disableBranchOnlyActions ? branchOnlyActionsReason : undefined}
       >
         <GitBranch size={10} className="flex-shrink-0 mr-1" />
-        <span className="truncate max-w-[80px]">{gitStatus.currentBranch}</span>
+        <span className="truncate max-w-[80px]">{headLabel}</span>
         <ChevronDown size={10} className="flex-shrink-0 opacity-60 ml-0.5" />
       </button>
 
       {showBranchPopover && (
         <GitBranchManager
           currentBranch={gitStatus.currentBranch}
+          disableBranchOnlyActions={disableBranchOnlyActions}
+          branchOnlyActionsReason={branchOnlyActionsReason}
           localBranches={localBranches}
           remoteBranches={remoteBranches}
           onCheckout={onCheckout}
@@ -150,6 +166,9 @@ const SourceControlHeader: React.FC<SourceControlHeaderProps> = ({
   activeRepo,
   rootPath,
   gitStatus,
+  headLabel,
+  disableBranchOnlyActions,
+  branchOnlyActionsReason,
   localBranches,
   remoteBranches,
   showBranchPopover,
@@ -203,6 +222,9 @@ const SourceControlHeader: React.FC<SourceControlHeaderProps> = ({
 
             <BranchWidget
               gitStatus={gitStatus}
+              headLabel={headLabel}
+              disableBranchOnlyActions={disableBranchOnlyActions}
+              branchOnlyActionsReason={branchOnlyActionsReason}
               localBranches={localBranches}
               remoteBranches={remoteBranches}
               showBranchPopover={showBranchPopover}

@@ -5,6 +5,7 @@ import { RotateCcw, ArrowUp, ArrowDown, Copy, Check, GitCommit, GitBranch, Tag, 
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { gitErrorMessage } from "./git/gitErrors";
+import { formatHeadLabel } from "./git/gitHeadLabel";
 
 interface GitCommitInfo {
   hash: string;
@@ -48,13 +49,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       ? repository.head.branch
       : null
     : gitStatus?.currentBranch ?? null;
-  const headBadgeLabel = repository
-    ? repository.head.mode === "branch"
-      ? repository.head.branch ?? "unknown"
-      : repository.head.mode === "detached"
-        ? `detached @ ${repository.head.oid?.slice(0, 7) ?? "?"}`
-        : "unborn"
-    : gitStatus?.currentBranch || "detached";
+  const headBadgeLabel = repository ? formatHeadLabel(repository.head) : gitStatus?.currentBranch || "detached";
 
   const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [loading, setLoading] = useState(false);

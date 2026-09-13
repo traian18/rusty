@@ -5,6 +5,12 @@ import { useConfirm } from "../useConfirm";
 
 interface GitBranchManagerProps {
   currentBranch: string;
+  /** True when HEAD isn't on a branch (detached, or no commits yet) --
+      "merge/rebase into current" has no current branch to act on then
+      (REFACTOR_PLAN.md PR 5b commit 22). Checking out, creating, and
+      deleting OTHER branches all remain valid and stay enabled. */
+  disableBranchOnlyActions?: boolean;
+  branchOnlyActionsReason?: string;
   localBranches: string[];
   remoteBranches: string[];
   onCheckout: (branch: string) => Promise<void>;
@@ -17,6 +23,8 @@ interface GitBranchManagerProps {
 
 export const GitBranchManager: React.FC<GitBranchManagerProps> = ({
   currentBranch,
+  disableBranchOnlyActions = false,
+  branchOnlyActionsReason,
   localBranches,
   remoteBranches,
   onCheckout,
@@ -198,7 +206,7 @@ export const GitBranchManager: React.FC<GitBranchManagerProps> = ({
             <span>Checkout</span>
           </button>
         )}
-        {!isCurrent && (
+        {!isCurrent && !disableBranchOnlyActions && (
           <button
             onClick={() => { handleMerge(branch); setSelectedBranch(null); }}
             className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--accent-bg)] text-xs font-sans text-[var(--text-normal)] hover:text-[var(--text-light)] rounded transition-colors flex items-center space-x-2 cursor-pointer border-none bg-transparent outline-none"
@@ -207,7 +215,7 @@ export const GitBranchManager: React.FC<GitBranchManagerProps> = ({
             <span>Merge into Current</span>
           </button>
         )}
-        {!isCurrent && (
+        {!isCurrent && !disableBranchOnlyActions && (
           <button
             onClick={() => { handleRebase(branch); setSelectedBranch(null); }}
             className="w-full text-left px-2.5 py-1.5 hover:bg-[var(--accent-bg)] text-xs font-sans text-[var(--text-normal)] hover:text-[var(--text-light)] rounded transition-colors flex items-center space-x-2 cursor-pointer border-none bg-transparent outline-none"
@@ -215,6 +223,11 @@ export const GitBranchManager: React.FC<GitBranchManagerProps> = ({
             <Play size={12} className="text-[var(--color-status-warning)]" />
             <span>Rebase Current onto Selected</span>
           </button>
+        )}
+        {!isCurrent && disableBranchOnlyActions && (
+          <div className="px-3 py-2 text-[9px] font-mono text-[var(--text-muted)] italic leading-relaxed">
+            Merge/Rebase unavailable: {branchOnlyActionsReason}
+          </div>
         )}
         {!isCurrent && (
           <button

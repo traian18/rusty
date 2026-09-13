@@ -11,6 +11,11 @@ interface SourceControlCommitBoxProps {
   isPushing: boolean;
   isPulling: boolean;
   totalChanges: number;
+  /** True when HEAD isn't on a branch (detached, or no commits yet) --
+      push/pull the "current branch" has no meaning then (REFACTOR_PLAN.md
+      PR 5b commit 22). */
+  disablePushPull?: boolean;
+  disablePushPullReason?: string;
   onCommitMsgChange: (msg: string) => void;
   onCommit: (e?: React.FormEvent) => Promise<void>;
   onPull: () => Promise<void>;
@@ -33,6 +38,8 @@ const SourceControlCommitBox: React.FC<SourceControlCommitBoxProps> = ({
   isPushing,
   isPulling,
   totalChanges,
+  disablePushPull = false,
+  disablePushPullReason,
   onCommitMsgChange,
   onCommit,
   onPull,
@@ -70,9 +77,9 @@ const SourceControlCommitBox: React.FC<SourceControlCommitBoxProps> = ({
           <button
             type="button"
             onClick={onPull}
-            disabled={isCommitting || isPushing || isPulling}
-            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-color)] hover:border-[var(--border-active)] hover:bg-[var(--bg-sidebar)] text-[var(--text-light)] text-[10px] font-mono font-bold py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer"
-            title="Pull changes from remote"
+            disabled={isCommitting || isPushing || isPulling || disablePushPull}
+            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-color)] hover:border-[var(--border-active)] hover:bg-[var(--bg-sidebar)] text-[var(--text-light)] text-[10px] font-mono font-bold py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            title={disablePushPull ? disablePushPullReason : "Pull changes from remote"}
           >
             <ArrowDown size={11} className={isPulling ? "animate-bounce" : ""} />
             <span>{isPulling ? "Pulling..." : "Pull"}</span>
@@ -80,9 +87,9 @@ const SourceControlCommitBox: React.FC<SourceControlCommitBoxProps> = ({
           <button
             type="button"
             onClick={onPush}
-            disabled={isCommitting || isPushing || isPulling}
-            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-color)] hover:border-[var(--border-active)] hover:bg-[var(--bg-sidebar)] text-[var(--text-light)] text-[10px] font-mono font-bold py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer"
-            title="Push changes to remote"
+            disabled={isCommitting || isPushing || isPulling || disablePushPull}
+            className="flex-1 bg-[var(--bg-app)] border border-[var(--border-color)] hover:border-[var(--border-active)] hover:bg-[var(--bg-sidebar)] text-[var(--text-light)] text-[10px] font-mono font-bold py-1.5 rounded-lg transition-all flex items-center justify-center space-x-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            title={disablePushPull ? disablePushPullReason : "Push changes to remote"}
           >
             <ArrowUp size={11} className={isPushing ? "animate-bounce" : ""} />
             <span>{isPushing ? "Pushing..." : "Push"}</span>

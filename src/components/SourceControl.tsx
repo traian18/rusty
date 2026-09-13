@@ -3,6 +3,7 @@ import { useWorkspaceStore } from "../store";
 import { invoke } from "@tauri-apps/api/core";
 import { gitPresenter } from "./git/GitPresenter";
 import { gitErrorMessage } from "./git/gitErrors";
+import { branchOnlyActionsDisabledReason, formatHeadLabel, isDetachedOrUnborn } from "./git/gitHeadLabel";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { buildUnstagedList } from "./sourceControl/sourceControlHelpers";
@@ -64,6 +65,18 @@ const SourceControl: React.FC = () => {
   // own entry hasn't been loaded into statusByRepositoryId yet.
   const gitStatus =
     (activeRepositoryId && statusByRepositoryId[activeRepositoryId]) || gitStatusSingleSlot;
+
+  // Real HEAD state for the active repository (REFACTOR_PLAN.md PR 5b
+  // commit 22) -- branch-only actions (push/pull the current branch, merge
+  // or rebase it) have no meaning with no current branch to act on, so
+  // they're disabled with an explanation instead of being sent to the
+  // backend to fail. Defaults to "on a branch" (nothing disabled) when the
+  // repository hasn't been discovered yet, matching this PR's established
+  // fallback shape elsewhere.
+  const activeHead = activeRepository?.head ?? null;
+  const headLabel = activeHead ? formatHeadLabel(activeHead) : gitStatus?.currentBranch || "detached";
+  const disableBranchOnlyActions = activeHead ? isDetachedOrUnborn(activeHead) : false;
+  const branchOnlyActionsReason = activeHead ? branchOnlyActionsDisabledReason(activeHead) : undefined;
 
   // ── Local State ────────────────────────────────────────────
   const [commitMsg, setCommitMsg] = useState("");
@@ -240,7 +253,7 @@ const SourceControl: React.FC = () => {
 
   /** Pull latest changes from the remote. */
   const handlePull = useCallback(async (): Promise<void> => {
-    if (!activeRepo || isPulling) return;
+    if (!activeRepo || isPulling || disableBranchOnlyActions) return;
     setIsPulling(true);
     try {
       await gitPresenter.pull(activeRepo);
@@ -250,11 +263,11 @@ const SourceControl: React.FC = () => {
     } finally {
       setIsPulling(false);
     }
-  }, [activeRepo, isPulling, loadRepoData]);
+  }, [activeRepo, isPulling, disableBranchOnlyActions, loadRepoData]);
 
   /** Push local commits to the remote. */
   const handlePush = useCallback(async (): Promise<void> => {
-    if (!activeRepo || !gitStatus || isPushing) return;
+    if (!activeRepo || !gitStatus || isPushing || disableBranchOnlyActions) return;
     setIsPushing(true);
     try {
       await gitPresenter.push(activeRepo, gitStatus.currentBranch);
@@ -264,7 +277,7 @@ const SourceControl: React.FC = () => {
     } finally {
       setIsPushing(false);
     }
-  }, [activeRepo, gitStatus, isPushing, loadRepoData]);
+  }, [activeRepo, gitStatus, isPushing, disableBranchOnlyActions, loadRepoData]);
 
   /** Stage a single file. */
   const handleStageFile = useCallback(
@@ -437,6 +450,7 @@ const SourceControl: React.FC = () => {
   /** Merge a branch into the current branch. */
   const handleMergeBranch = useCallback(
     async (branchName: string): Promise<void> => {
+      if (disableBranchOnlyActions) return;
       try {
         await gitPresenter.mergeBranch(activeRepo, branchName);
         await loadRepoData();
@@ -445,12 +459,13 @@ const SourceControl: React.FC = () => {
         console.error(err);
       }
     },
-    [activeRepo, loadRepoData],
+    [activeRepo, disableBranchOnlyActions, loadRepoData],
   );
 
   /** Rebase the current branch onto another branch. */
   const handleRebaseBranch = useCallback(
     async (branchName: string): Promise<void> => {
+      if (disableBranchOnlyActions) return;
       try {
         await gitPresenter.rebaseBranch(activeRepo, branchName);
         await loadRepoData();
@@ -459,7 +474,7 @@ const SourceControl: React.FC = () => {
         console.error(err);
       }
     },
-    [activeRepo, loadRepoData],
+    [activeRepo, disableBranchOnlyActions, loadRepoData],
   );
 
   /** Abort a pending merge or rebase. */
@@ -538,6 +553,9 @@ const SourceControl: React.FC = () => {
         activeRepo={activeRepo}
         rootPath={rootPath}
         gitStatus={gitStatus}
+        headLabel={headLabel}
+        disableBranchOnlyActions={disableBranchOnlyActions}
+        branchOnlyActionsReason={branchOnlyActionsReason}
         localBranches={localBranches}
         remoteBranches={remoteBranches}
         showBranchPopover={showBranchPopover}
@@ -560,6 +578,8 @@ const SourceControl: React.FC = () => {
           isPushing={isPushing}
           isPulling={isPulling}
           totalChanges={totalChanges}
+          disablePushPull={disableBranchOnlyActions}
+          disablePushPullReason={branchOnlyActionsReason}
           onCommitMsgChange={setCommitMsg}
           onCommit={handleCommit}
           onPull={handlePull}

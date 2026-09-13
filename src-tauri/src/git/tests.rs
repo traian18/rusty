@@ -728,3 +728,47 @@ async fn discover_submodules_reports_no_state_for_an_uninitialized_submodule() {
 
     assert_eq!(submodules[0].submodule_state, None, "an uninitialized submodule has no working tree to classify");
 }
+
+// ── PR 5a commit 12: remaining fixture matrix ────────────────────────────
+
+#[tokio::test]
+async fn git_fetch_is_a_silent_noop_for_a_repository_without_a_remote() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+
+    let result = git_fetch(fx.path_str()).await;
+
+    assert!(result.is_ok(), "expected git_fetch to succeed silently with no remote configured, got: {:?}", result.err());
+}
+
+#[tokio::test]
+async fn git_get_all_branches_reports_no_remote_branches_for_a_repository_without_a_remote() {
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+
+    let branches = git_get_all_branches(fx.path_str()).await.unwrap();
+
+    assert_eq!(branches.local, vec!["main".to_string()]);
+    assert!(branches.remote.is_empty());
+}
+
+#[tokio::test]
+async fn git_push_sets_the_upstream_automatically_when_the_current_branch_has_none() {
+    // "Branch without an upstream": a real remote exists, but the current
+    // branch has never been pushed, so plain `git push` fails with "has no
+    // upstream branch" -- git_push's existing retry logic should recover
+    // by pushing with --set-upstream, exercised here against a real
+    // fixture remote rather than just reading the code.
+    let remote = GitFixture::init_bare();
+    let fx = GitFixture::init();
+    fx.commit_file("a.txt", "one\n", "initial commit");
+    fx.git_ok(&["remote", "add", "origin", &remote.path_str()]);
+
+    let result = git_push(fx.path_str(), "main".to_string()).await;
+
+    assert!(result.is_ok(), "expected git_push to recover via --set-upstream, got: {:?}", result.err());
+    // Confirm the upstream was actually recorded, not just that push
+    // returned Ok for some unrelated reason.
+    let upstream = fx.git_ok(&["rev-parse", "--abbrev-ref", "main@{upstream}"]);
+    assert_eq!(upstream, "origin/main");
+}

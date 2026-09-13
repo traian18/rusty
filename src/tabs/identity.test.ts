@@ -127,6 +127,29 @@ describe("git identities", () => {
       gitDiffTabIdentity({ ...base, commitHash: "bbb" }, false),
     );
   });
+
+  // REFACTOR_PLAN.md PR 5b commit 25: a pinning test, not a fix -- both
+  // identities already key on repoPath (asserted generically above), so a
+  // submodule's own file resolving to its submodule's repoPath instead of
+  // the parent workspace's should already disambiguate correctly once a
+  // caller (FileTab's blame, GitHistoryTabContent, commits 18-19) passes
+  // the right repoPath through. This documents that guarantee explicitly
+  // for the submodule scenario this PR adds, rather than leaving it as an
+  // unstated consequence of the generic "two repositories" case.
+  it("disambiguates a submodule file's tabs from the same path viewed at the parent workspace root", () => {
+    const submodulePath = "/repo/vendor/lib/a.ts";
+    const submoduleRepo = "/repo/vendor/lib";
+    const workspaceRoot = "/repo";
+
+    expect(gitHistoryTabIdentity(submoduleRepo, submodulePath, false)).not.toBe(
+      gitHistoryTabIdentity(workspaceRoot, submodulePath, false),
+    );
+
+    const base = { path: submodulePath, diffType: "unstaged" } as const;
+    expect(gitDiffTabIdentity({ ...base, repoPath: submoduleRepo }, false)).not.toBe(
+      gitDiffTabIdentity({ ...base, repoPath: workspaceRoot }, false),
+    );
+  });
 });
 
 describe("canvas and task identities", () => {

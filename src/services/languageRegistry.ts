@@ -142,6 +142,16 @@ export interface LanguageRule {
   filenamePrefixes?: string[];
   /** Lowercase extensions, no leading dot. */
   extensions?: string[];
+  /**
+   * Shebang interpreter basenames (e.g. "python3", "bash", "node") this
+   * rule also matches -- only consulted by `resolveLanguage` when nothing
+   * else matched AND a first line of file content was supplied, since a
+   * shebang can't be checked from a filename alone. `#!/usr/bin/env X`
+   * resolves to `X`, not `env`; a trailing version number (`python3.11`)
+   * is also tried stripped, so a bare entry like "python" matches both
+   * "python3" and "python3.11".
+   */
+  shebangInterpreters?: string[];
 }
 
 /**
@@ -181,23 +191,23 @@ const RULES: LanguageRule[] = [
   { id: "typescript", iconKey: "react", extensions: ["tsx"] },
   { id: "typescript", iconKey: "typescript", extensions: ["ts", "mts", "cts"] },
   { id: "javascript", iconKey: "react", extensions: ["jsx"] },
-  { id: "javascript", iconKey: "javascript", extensions: ["js", "mjs", "cjs"] },
+  { id: "javascript", iconKey: "javascript", extensions: ["js", "mjs", "cjs"], shebangInterpreters: ["node"] },
   { id: "html", iconKey: "html", extensions: ["html", "htm", "xhtml"] },
   { id: "css", iconKey: "css", extensions: ["css", "scss", "sass", "less"] },
   { id: "json", iconKey: "json", extensions: ["json"] },
   { id: "markdown", iconKey: "markdown", extensions: ["md", "markdown"] },
-  { id: "python", iconKey: "python", extensions: ["py", "pyw"] },
+  { id: "python", iconKey: "python", extensions: ["py", "pyw"], shebangInterpreters: ["python", "python2", "python3"] },
   { id: "java", iconKey: "java", extensions: ["java", "class", "jar"] },
   { id: "rust", iconKey: "rust", extensions: ["rs"] },
   { id: "go", iconKey: "go", extensions: ["go"] },
-  { id: "ruby", iconKey: "ruby", extensions: ["rb"] },
-  { id: "php", iconKey: "php", extensions: ["php"] },
+  { id: "ruby", iconKey: "ruby", extensions: ["rb"], shebangInterpreters: ["ruby"] },
+  { id: "php", iconKey: "php", extensions: ["php"], shebangInterpreters: ["php"] },
   { id: "cpp", iconKey: "cpp", extensions: ["cpp", "cc", "cxx", "hpp", "h"] },
   { id: "c", iconKey: "c", extensions: ["c"] },
   { id: "csharp", iconKey: "default", extensions: ["cs"] },
   { id: "lua", iconKey: "default", extensions: ["lua"] },
   { id: "sql", iconKey: "sql", extensions: ["sql", "psql", "sqlite", "sqlite3", "db"] },
-  { id: "shell", iconKey: "shell", extensions: ["sh", "bash", "zsh", "fish"] },
+  { id: "shell", iconKey: "shell", extensions: ["sh", "bash", "zsh", "fish"], shebangInterpreters: ["sh", "bash", "zsh", "fish"] },
   { id: "bat", iconKey: "shell", extensions: ["bat", "cmd"] },
   // Real Monaco tokenizer for PowerShell exists (basic-languages/powershell) --
   // `.ps1` used to be lumped in with the Windows-batch "bat" id above, which
@@ -236,8 +246,34 @@ const RULES: LanguageRule[] = [
 
 const DEFAULT_RULE: LanguageRule = { id: "plaintext", iconKey: "default" };
 
-/** Resolve a filename to its full language rule (id + iconKey). */
-export function resolveLanguage(fileName: string): LanguageRule {
+/**
+ * Extracts the interpreter basename from a shebang line, or null if
+ * `line` isn't one. `#!/usr/bin/env python3` resolves to "python3", not
+ * "env" -- `env`'s whole job is to look up the real interpreter by name,
+ * so treating it as the language would misclassify every env-shebang'd
+ * script (the overwhelming majority of real-world ones).
+ */
+function parseShebangInterpreter(line: string): string | null {
+  if (!line.startsWith("#!")) return null;
+  const tokens = line.slice(2).trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const basename = (token: string) => token.split("/").pop() || token;
+  const first = basename(tokens[0]);
+  if (first === "env" && tokens.length > 1) return basename(tokens[1]);
+  return first;
+}
+
+/**
+ * Resolve a filename to its full language rule (id + iconKey).
+ * `firstLine`, when supplied, is only consulted as a last resort (after
+ * every filename/prefix/extension check has failed) to detect a shebang on
+ * an otherwise-unrecognized extensionless script -- a filename-only lookup
+ * can never see file content, so `getMonacoLanguageId`/`getLspKeyFromPath`
+ * (both filename-only) can't benefit from this; callers that already have
+ * the file's content loaded (FileTab.tsx) call `resolveLanguage` directly
+ * with it once available.
+ */
+export function resolveLanguage(fileName: string, firstLine?: string): LanguageRule {
   const lower = fileName.toLowerCase();
 
   for (const rule of RULES) {
@@ -250,6 +286,15 @@ export function resolveLanguage(fileName: string): LanguageRule {
   for (const rule of RULES) {
     if (rule.extensions?.includes(ext)) return rule;
   }
+
+  const interpreter = firstLine ? parseShebangInterpreter(firstLine) : null;
+  if (interpreter) {
+    const versionless = interpreter.replace(/[\d.]+$/, "");
+    for (const rule of RULES) {
+      if (rule.shebangInterpreters?.some((i) => i === interpreter || i === versionless)) return rule;
+    }
+  }
+
   return DEFAULT_RULE;
 }
 

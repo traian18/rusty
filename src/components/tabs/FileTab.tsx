@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../../store";
 import { invoke } from "@tauri-apps/api/core";
 import { VfsRegistry } from "../../services/vfs";
 import { getFileTypeDetails } from "../../services/fileTypeService";
+import { getMonacoLanguageId, resolveLanguage } from "../../services/languageRegistry";
 import { themes, defineMonacoTheme } from "../../theme";
 import { Eye, FileCode2, FileSearch, GitBranch, History, Loader2, TreePine, X } from "lucide-react";
 import { LspStatus } from "../../services/lspService";
@@ -58,6 +59,11 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
     message?: string;
   } | null>(null);
   const [markdownPreview, setMarkdownPreview] = useState(false);
+  // Set only when a shebang line changes the language resolution away from
+  // the filename-only guess (REFACTOR_PLAN.md PR 6 commit 5) -- an
+  // extensionless script is the only case that can happen for, so this
+  // stays null for every other file.
+  const [shebangLanguage, setShebangLanguage] = useState<string | null>(null);
   const [inlineChat, setInlineChat] = useState<{
     context: InlineChatEditorContext;
     position: { x: number; y: number };
@@ -126,11 +132,20 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
 
   // Load content on mount
   useEffect(() => {
+    setShebangLanguage(null);
     const fetchFileContent = async () => {
       try {
         console.log(`FileTab reading VFS path: ${tab.path}`);
         const content: string = await VfsRegistry.getOrCreate(canvasTabId).readFile(tab.path);
         setFileContent(content);
+        // Shebang detection (PR 6 commit 5): only worth checking when the
+        // filename alone resolved to nothing more specific -- an
+        // already-recognized extension is never overridden by a shebang.
+        if (getMonacoLanguageId(tab.path) === "plaintext") {
+          const firstLine = content.split("\n", 1)[0] ?? "";
+          const resolved = resolveLanguage(tab.path, firstLine);
+          if (resolved.id !== "plaintext") setShebangLanguage(resolved.id);
+        }
       } catch (err: any) {
         console.error("FileTab failed to read VFS:", err);
         setFileContent(`// Error reading file: ${err.message}`);
@@ -461,7 +476,7 @@ export const FileTab: React.FC<FileTabProps> = ({ tab, isActive }) => {
   };
 
   const getEditorLanguage = (filePath: string): string => {
-    return getFileTypeDetails(filePath).language;
+    return shebangLanguage ?? getFileTypeDetails(filePath).language;
   };
 
   if (loading) {

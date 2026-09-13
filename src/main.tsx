@@ -20,6 +20,7 @@ const store = useWorkspaceStore.getState();
 store.hydrateTheme();
 store.hydrateTypography();
 store.hydrateShortcuts();
+store.hydrateEditorFileSafety();
 
 const hydratedState = useWorkspaceStore.getState();
 applyThemeProperties(resolveTheme(hydratedState.activeThemeId));

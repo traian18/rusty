@@ -10,6 +10,11 @@ import {
   SHORTCUT_DEFAULTS,
   type ShortcutAction,
 } from "../../preferences/shortcuts";
+import {
+  loadEditorFileSafetyPreferences,
+  saveEditorFileSafetyPreferences,
+  EDITOR_FILE_SAFETY_DEFAULTS,
+} from "../../preferences/editorFileSafety";
 import type { WorkspaceSliceCreator } from "../sliceTypes";
 
 /**
@@ -45,4 +50,16 @@ export const createPreferencesSlice: WorkspaceSliceCreator = (set) => ({
     keyboardShortcuts: saveKeyboardShortcuts({ ...SHORTCUT_DEFAULTS }),
   }),
   hydrateShortcuts: () => set({ keyboardShortcuts: loadKeyboardShortcuts() }),
+
+  editorFileSafety: { ...EDITOR_FILE_SAFETY_DEFAULTS },
+  setLargeFileThresholdBytes: (bytes: number) => set((state) => ({
+    editorFileSafety: saveEditorFileSafetyPreferences({
+      ...state.editorFileSafety,
+      largeFileThresholdBytes: bytes,
+    }),
+  })),
+  resetEditorFileSafety: () => set({
+    editorFileSafety: saveEditorFileSafetyPreferences({ ...EDITOR_FILE_SAFETY_DEFAULTS }),
+  }),
+  hydrateEditorFileSafety: () => set({ editorFileSafety: loadEditorFileSafetyPreferences() }),
 });

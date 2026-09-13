@@ -1,6 +1,7 @@
 import React from "react";
 import { AppearanceSettings } from "../settings/AppearanceSettings";
 import { TypographySettings } from "../settings/TypographySettings";
+import { EditorFileSafetySettings } from "../settings/EditorFileSafetySettings";
 import { KeyboardShortcutsSettings } from "../settings/KeyboardShortcutsSettings";
 import styles from "./SettingsTab.module.css";
 
@@ -16,6 +17,7 @@ export const SettingsTab: React.FC = () => {
 
         <div className={styles.panel}><AppearanceSettings /></div>
         <div className={styles.panel}><TypographySettings /></div>
+        <div className={styles.panel}><EditorFileSafetySettings /></div>
         <div className={styles.panel}><KeyboardShortcutsSettings /></div>
       </div>
     </div>

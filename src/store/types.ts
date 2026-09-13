@@ -8,6 +8,7 @@ import type {
 import type { McpServerConfig } from "../components/mcp/types";
 import type { TypographyPreferences } from "../preferences/typography";
 import type { KeyboardShortcutPreferences, ShortcutAction } from "../preferences/shortcuts";
+import type { EditorFileSafetyPreferences } from "../preferences/editorFileSafety";
 import type { DrawerView } from "../preferences/shellLayout";
 import type { OpenTabRequest, TabInstance } from "../tabs/types";
 import type { StartupState } from "../startup/types";
@@ -472,6 +473,11 @@ export interface WorkspaceState {
   setKeyboardShortcut: (action: ShortcutAction, shortcut: string) => void;
   resetKeyboardShortcuts: () => void;
   hydrateShortcuts: () => void;
+  /** Same hydration contract as hydrateTheme() above (REFACTOR_PLAN.md PR 6). */
+  editorFileSafety: EditorFileSafetyPreferences;
+  setLargeFileThresholdBytes: (bytes: number) => void;
+  resetEditorFileSafety: () => void;
+  hydrateEditorFileSafety: () => void;
 
   setRootPath: (path: string) => void;
   /** Git status + skills + metrics for the current rootPath, settled

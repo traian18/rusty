@@ -11,6 +11,10 @@ interface NumberStepperProps {
   max: number;
   step?: number;
   label: string;
+  /** Unit shown next to the input and named in its aria-label (e.g. "px",
+      "MB"). Defaults to "px" -- every caller before PR 6's
+      EditorFileSafetySettings only ever used pixel values. */
+  unit?: string;
   onChange: (value: number) => void;
 }
 
@@ -23,6 +27,7 @@ export function NumberStepper({
   max,
   step = 1,
   label,
+  unit = "px",
   onChange,
 }: NumberStepperProps) {
   const [draft, setDraft] = useState(String(value));
@@ -58,7 +63,7 @@ export function NumberStepper({
           min={min}
           max={max}
           step={step}
-          aria-label={`${label} in pixels`}
+          aria-label={`${label} in ${unit === "px" ? "pixels" : unit}`}
           onChange={(event) => setDraft(event.currentTarget.value)}
           onBlur={commitDraft}
           onKeyDown={(event) => {
@@ -68,7 +73,7 @@ export function NumberStepper({
             }
           }}
         />
-        <span className={styles.unit}>px</span>
+        <span className={styles.unit}>{unit}</span>
       </div>
       <button
         id={incrementId}

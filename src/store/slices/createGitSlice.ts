@@ -134,4 +134,28 @@ export const createGitSlice: WorkspaceSliceCreator = (set, get) => ({
       console.error(`Failed to load git status for repository ${repositoryId}:`, error);
     }
   },
+
+  initSubmodule: async (repositoryId) => {
+    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+    const rootPath = get().rootPath;
+    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+    await invoke("git_submodule_init", { rootDir: rootPath, submodulePath: repo.submodulePath });
+    await get().discoverRepositories();
+  },
+
+  updateSubmodule: async (repositoryId, recursive) => {
+    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+    const rootPath = get().rootPath;
+    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+    await invoke("git_submodule_update", { rootDir: rootPath, submodulePath: repo.submodulePath, recursive });
+    await get().discoverRepositories();
+  },
+
+  syncSubmodule: async (repositoryId) => {
+    const repo = get().repositories.find((candidate) => candidate.id === repositoryId);
+    const rootPath = get().rootPath;
+    if (!repo || repo.kind !== "submodule" || !repo.submodulePath || !rootPath) return;
+    await invoke("git_submodule_sync", { rootDir: rootPath, submodulePath: repo.submodulePath });
+    await get().discoverRepositories();
+  },
 });

@@ -43,6 +43,9 @@ const SourceControl: React.FC = () => {
   const activeRepositoryId = useWorkspaceStore((state) => state.activeRepositoryId);
   const setActiveRepositoryId = useWorkspaceStore((state) => state.setActiveRepositoryId);
   const discoverRepositories = useWorkspaceStore((state) => state.discoverRepositories);
+  const initSubmodule = useWorkspaceStore((state) => state.initSubmodule);
+  const updateSubmodule = useWorkspaceStore((state) => state.updateSubmodule);
+  const syncSubmodule = useWorkspaceStore((state) => state.syncSubmodule);
 
   // `activeRepo`/`subprojects` used to be local component state, populated
   // by the naive `scanSubprojects()` filesystem walk (REFACTOR_PLAN.md PR
@@ -84,6 +87,7 @@ const SourceControl: React.FC = () => {
   const [isPushing, setIsPushing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [initLoading, setInitLoading] = useState(false);
+  const [submoduleActionLoading, setSubmoduleActionLoading] = useState<"init" | "update" | "sync" | null>(null);
   const [localBranches, setLocalBranches] = useState<string[]>([]);
   const [remoteBranches, setRemoteBranches] = useState<string[]>([]);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true);
@@ -529,6 +533,36 @@ const SourceControl: React.FC = () => {
     [repositories, setActiveRepositoryId],
   );
 
+  /** Register/clone/re-sync the active repository's submodule
+      (REFACTOR_PLAN.md PR 5b commit 23) -- a no-op for any repository that
+      isn't a submodule, enforced by the store action itself. */
+  const handleSubmoduleAction = useCallback(
+    async (action: "init" | "update" | "sync"): Promise<void> => {
+      if (!activeRepositoryId || submoduleActionLoading) return;
+      setSubmoduleActionLoading(action);
+      try {
+        if (action === "init") await initSubmodule(activeRepositoryId);
+        else if (action === "update") await updateSubmodule(activeRepositoryId, true);
+        else await syncSubmodule(activeRepositoryId);
+        notify(
+          "Submodule updated",
+          action === "init"
+            ? "Submodule registered locally."
+            : action === "update"
+              ? "Submodule cloned/checked out."
+              : "Submodule URL synced from .gitmodules.",
+          "success",
+        );
+      } catch (err) {
+        console.error(`Submodule ${action} failed:`, err);
+        notify(`Submodule ${action} failed`, gitErrorMessage(err), "error");
+      } finally {
+        setSubmoduleActionLoading(null);
+      }
+    },
+    [activeRepositoryId, submoduleActionLoading, initSubmodule, updateSubmodule, syncSubmodule],
+  );
+
   // ── Early Returns (Empty / Non-Repo States) ───────────────
 
   if (!rootPath) {
@@ -551,11 +585,17 @@ const SourceControl: React.FC = () => {
       <SourceControlHeader
         subprojects={subprojects}
         activeRepo={activeRepo}
+        repositories={repositories}
+        activeRepository={activeRepository}
         rootPath={rootPath}
         gitStatus={gitStatus}
         headLabel={headLabel}
         disableBranchOnlyActions={disableBranchOnlyActions}
         branchOnlyActionsReason={branchOnlyActionsReason}
+        submoduleActionLoading={submoduleActionLoading}
+        onInitSubmodule={() => handleSubmoduleAction("init")}
+        onUpdateSubmodule={() => handleSubmoduleAction("update")}
+        onSyncSubmodule={() => handleSubmoduleAction("sync")}
         localBranches={localBranches}
         remoteBranches={remoteBranches}
         showBranchPopover={showBranchPopover}

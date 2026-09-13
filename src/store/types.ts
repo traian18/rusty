@@ -387,6 +387,17 @@ export interface WorkspaceState {
       statusByRepositoryId, keyed by its id -- the per-repository
       counterpart to the deprecated single-slot loadGitStatus. */
   loadRepositoryGitStatus: (repositoryId: string) => Promise<void>;
+  /** Submodule actions (REFACTOR_PLAN.md PR 5b commit 23), backed by PR 5a
+      #13's git_submodule_init/update/sync. All three take a discovered
+      `kind: "submodule"` repository's id, re-run discoverRepositories() on
+      success to refresh `initialized`/`submoduleState`, and are no-ops for
+      any other kind. Gitlink staging needs no action here -- a changed
+      gitlink already shows up as a modified path in the *parent*
+      repository's own status, so the existing stageFile action (against
+      the parent's id) already covers it, per PR 5a #13's own design note. */
+  initSubmodule: (repositoryId: string) => Promise<void>;
+  updateSubmodule: (repositoryId: string, recursive: boolean) => Promise<void>;
+  syncSubmodule: (repositoryId: string) => Promise<void>;
   lastRename: { originalPath: string; newPath: string } | null;
   setLastRename: (rename: { originalPath: string; newPath: string } | null) => void;
   collapseAllTrigger?: number;

@@ -175,6 +175,42 @@ const DefaultLogo: React.FC<{ size: number; className?: string }> = ({ size, cla
   </svg>
 );
 
+/**
+ * Generates a colored-rect-plus-text-label logo, the same shape several
+ * hand-written logos above already use (JsonLogo, GoLogo, PhpLogo, CppLogo,
+ * CLogo...). Used for languages added in PR 6's coverage pass that don't
+ * warrant a bespoke hand-drawn SVG -- each still gets its real brand color,
+ * just generated instead of hand-authored per language.
+ */
+function makeLetterBadgeLogo(
+  label: string,
+  bg: string,
+  fg: string = "#fff",
+): React.FC<{ size: number; className?: string }> {
+  const fontSize = label.length >= 4 ? 26 : label.length === 3 ? 32 : 42;
+  const LetterBadgeLogo: React.FC<{ size: number; className?: string }> = ({ size, className }) => (
+    <svg viewBox="0 0 100 100" width={size} height={size} className={className}>
+      <rect width="100" height="100" rx="8" fill={bg} />
+      <text x="50" y="65" fill={fg} fontSize={fontSize} fontWeight="900" fontFamily="sans-serif" textAnchor="middle">
+        {label}
+      </text>
+    </svg>
+  );
+  return LetterBadgeLogo;
+}
+
+const KotlinLogo = makeLetterBadgeLogo("KT", "#7f52ff");
+const ScalaLogo = makeLetterBadgeLogo("SC", "#dc322f");
+const SwiftLogo = makeLetterBadgeLogo("SW", "#f05138");
+const FSharpLogo = makeLetterBadgeLogo("F#", "#378bba");
+const ObjectiveCLogo = makeLetterBadgeLogo("OBJC", "#438eff");
+const DartLogo = makeLetterBadgeLogo("DART", "#0175c2");
+const RLogo = makeLetterBadgeLogo("R", "#276dc3");
+const PowerShellLogo = makeLetterBadgeLogo("PS1", "#012456");
+const HclLogo = makeLetterBadgeLogo("TF", "#7b42bc");
+const GraphqlLogo = makeLetterBadgeLogo("GQL", "#e10098");
+const ProtobufLogo = makeLetterBadgeLogo("PB", "#4285f4");
+
 // --- 2. Filetype Details Mapping ---
 
 export interface FileTypeDetails {
@@ -225,6 +261,17 @@ const ICONS: Record<IconKey, React.FC<{ size: number; className?: string }>> = {
   env: EnvLogo,
   git: GitLogo,
   docker: DockerLogo,
+  kotlin: KotlinLogo,
+  scala: ScalaLogo,
+  swift: SwiftLogo,
+  fsharp: FSharpLogo,
+  objectivec: ObjectiveCLogo,
+  dart: DartLogo,
+  r: RLogo,
+  powershell: PowerShellLogo,
+  hcl: HclLogo,
+  graphql: GraphqlLogo,
+  protobuf: ProtobufLogo,
   default: DefaultLogo,
 };
 

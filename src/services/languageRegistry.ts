@@ -119,6 +119,17 @@ export type IconKey =
   | "env"
   | "git"
   | "docker"
+  | "kotlin"
+  | "scala"
+  | "swift"
+  | "fsharp"
+  | "objectivec"
+  | "dart"
+  | "r"
+  | "powershell"
+  | "hcl"
+  | "graphql"
+  | "protobuf"
   | "default";
 
 export interface LanguageRule {
@@ -172,11 +183,38 @@ const RULES: LanguageRule[] = [
   { id: "lua", iconKey: "default", extensions: ["lua"] },
   { id: "sql", iconKey: "sql", extensions: ["sql", "psql", "sqlite", "sqlite3", "db"] },
   { id: "shell", iconKey: "shell", extensions: ["sh", "bash", "zsh", "fish"] },
-  { id: "bat", iconKey: "shell", extensions: ["bat", "cmd", "ps1"] },
+  { id: "bat", iconKey: "shell", extensions: ["bat", "cmd"] },
+  // Real Monaco tokenizer for PowerShell exists (basic-languages/powershell) --
+  // `.ps1` used to be lumped in with the Windows-batch "bat" id above, which
+  // has its own, wrong, tokenizer. Fixed as part of PR 6's coverage pass.
+  { id: "powershell", iconKey: "powershell", extensions: ["ps1", "psm1", "psd1"] },
   { id: "toml", iconKey: "config", extensions: ["toml"] },
   { id: "yaml", iconKey: "config", extensions: ["yaml", "yml"] },
   { id: "xml", iconKey: "config", extensions: ["xml"] },
   { id: "ini", iconKey: "config", extensions: ["ini", "conf", "config", "lock", "properties"] },
+
+  // PR 6 coverage expansion -- languages confirmed present in the installed
+  // monaco-editor's basic-languages set (see plan file for the verification).
+  { id: "kotlin", iconKey: "kotlin", extensions: ["kt", "kts"] },
+  { id: "scala", iconKey: "scala", extensions: ["scala", "sc"] },
+  { id: "objective-c", iconKey: "objectivec", extensions: ["m", "mm"] },
+  { id: "fsharp", iconKey: "fsharp", extensions: ["fs", "fsx", "fsi"] },
+  { id: "swift", iconKey: "swift", extensions: ["swift"] },
+  { id: "dart", iconKey: "dart", extensions: ["dart"] },
+  { id: "r", iconKey: "r", extensions: ["r"] },
+  // Terraform has no dedicated Monaco tokenizer; HCL (Terraform's own
+  // underlying grammar) does, and covers .tf/.tfvars reasonably.
+  { id: "hcl", iconKey: "hcl", extensions: ["tf", "tfvars", "hcl"] },
+  { id: "graphql", iconKey: "graphql", extensions: ["graphql", "gql"] },
+  // Monaco's basic-languages id for this tokenizer is "proto", not
+  // "protobuf" -- confirmed directly against the installed package.
+  { id: "proto", iconKey: "protobuf", extensions: ["proto"] },
+  { id: "mdx", iconKey: "markdown", extensions: ["mdx"] },
+  // No distinct "jsonc" language is registered in this Monaco build (VS
+  // Code itself has one; vanilla monaco-editor doesn't) -- .jsonc gets
+  // plain JSON's tokenizer, which won't highlight `//` comments specially
+  // but won't misrender otherwise. Documented, not silently wrong.
+  { id: "json", iconKey: "json", extensions: ["jsonc"] },
 ];
 
 const DEFAULT_RULE: LanguageRule = { id: "plaintext", iconKey: "default" };

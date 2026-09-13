@@ -348,32 +348,39 @@ gitignored, so git cannot detect or prevent the copy, and each was a one-time
 result of moving or copying a checkout rather than cloning fresh. Knowing the
 exact error strings above is what makes them findable.
 
-### Missing bundled Node binary or sidecar resources on a fresh checkout
+### Missing or stale sidecar resources on a fresh checkout (or after pulling)
 
 Any `cargo` command that goes through `tauri-build` — including
 `cargo check` and `cargo test`, not just `cargo build` — fails on a fresh
-checkout with one of:
+checkout with:
 
 ```
-resource path `bin/node-<target-triple>` doesn't exist
 resource path `resources/sidecar` doesn't exist
 ```
 
-`tauri.conf.json` declares `externalBin: ["bin/node"]` and
-`"resources": ["resources/sidecar"]`, and Tauri's build script checks that
-both exist before it will build anything, even though unit tests never
-invoke either one. Both are gitignored, downloaded/generated artifacts (see
-`.github/workflows/release.yml`, which performs the equivalent download for
-its one CI platform, and `scripts/prepare-sidecar-runtime.mjs`, which builds
-`resources/sidecar` from `agent-sidecar`'s own build output). `npm run
-test:rust` and `npm run lint:rust` provision both automatically via a
-`pretest:rust` / `prelint:rust` hook — `scripts/fetch-sidecar-node-runtime.mjs`
-then `scripts/ensure-sidecar-resources.mjs`, both idempotent, no-ops once
-their target already exists; run them directly if you need either for a
-plain `cargo check` or `cargo build` (assumes `agent-sidecar`'s own
-dependencies are already installed):
+`tauri.conf.json` declares `"resources": ["resources/sidecar"]`, and Tauri's
+build script checks that it exists before it will build anything, even
+though unit tests never read from it. It's a gitignored, generated artifact
+(`scripts/prepare-sidecar-runtime.mjs` builds it from `agent-sidecar`'s own
+build output, staging the platform's bundled `rusty-node[.exe]` binary
+inside it too — see "Bundled Node runtime for the agent sidecar" above).
+`npm run test:rust` and `npm run lint:rust` provision it automatically via a
+`pretest:rust` / `prelint:rust` hook, `scripts/ensure-sidecar-resources.mjs`
+— idempotent, a no-op once a complete `resources/sidecar` (including the
+node binary, not just the directory) already exists; run it directly if you
+need it for a plain `cargo check` or `cargo build` (assumes
+`agent-sidecar`'s own dependencies and the bundled node binary from the
+table above are already in place):
 
 ```bash
-node scripts/fetch-sidecar-node-runtime.mjs
 node scripts/ensure-sidecar-resources.mjs
 ```
+
+If the app itself fails a startup health check with something like
+"Checking the agent sidecar failed", or LLM integration checks in the
+Settings tab all show failed, `resources/sidecar/rusty-node[.exe]` is
+usually the actual missing piece even though `resources/sidecar/` itself
+already exists (this once had no node binary staged inside it at all,
+before this build was reworked to be cross-platform) — `npm run
+build:sidecar` rebuilds it from scratch unconditionally, regardless of
+`ensure-sidecar-resources.mjs`'s own check.

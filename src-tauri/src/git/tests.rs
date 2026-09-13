@@ -17,8 +17,15 @@ use super::*;
 
 #[tokio::test]
 async fn git_status_on_nonexistent_path_errors() {
+    // PR 5a commit 3: git_status now rejects with a structured GitError
+    // (operation/repository/exit_code/stderr/message) instead of a bare
+    // string.
     let result = git_status("/no/such/path/rusty-test-fixture".to_string()).await;
-    assert_eq!(result.unwrap_err(), "Directory does not exist");
+    let err = result.unwrap_err();
+    assert_eq!(err.operation, "git_status");
+    assert_eq!(err.repository, "/no/such/path/rusty-test-fixture");
+    assert_eq!(err.exit_code, None);
+    assert_eq!(err.message, "Directory does not exist");
 }
 
 #[tokio::test]

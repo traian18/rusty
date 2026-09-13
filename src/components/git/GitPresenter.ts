@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWorkspaceStore } from "../../store";
 import { notify } from "../../notificationStore";
 import { GitActions } from "./GitActions";
+import { gitErrorMessage as errorMessage } from "./gitErrors";
 
 export const gitPresenter: GitActions = {
   async commit(rootDir: string, message: string): Promise<void> {
@@ -12,12 +13,7 @@ export const gitPresenter: GitActions = {
       notify("Commit Complete", "Successfully committed staged modifications.", "success");
     } catch (err: any) {
       console.error("Failed to commit git modifications:", err);
-      // git_commit now rejects with a structured GitError object (PR 5a),
-      // not a bare string -- String(err) would print "[object Object]" for
-      // it. `?? String(err)` keeps this correct for the remaining
-      // not-yet-converted commands' plain-string errors during the PR 5a
-      // migration window.
-      notify("Commit Failed", err?.message ?? String(err), "error");
+      notify("Commit Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -29,7 +25,7 @@ export const gitPresenter: GitActions = {
       notify("Push Complete", "Successfully pushed local commits to remote.", "success");
     } catch (err: any) {
       console.error("Failed to push branch:", err);
-      notify("Push Failed", String(err), "error");
+      notify("Push Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -45,7 +41,7 @@ export const gitPresenter: GitActions = {
       notify("Pull Complete", "Successfully pulled remote updates.", "success");
     } catch (err: any) {
       console.error("Failed to pull changes:", err);
-      notify("Pull Failed", String(err), "error");
+      notify("Pull Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -57,7 +53,7 @@ export const gitPresenter: GitActions = {
       await useWorkspaceStore.getState().loadGitStatus();
     } catch (err: any) {
       console.error(`Failed to stage file:`, err);
-      notify("Stage Failed", String(err), "error");
+      notify("Stage Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -69,7 +65,7 @@ export const gitPresenter: GitActions = {
       await useWorkspaceStore.getState().loadGitStatus();
     } catch (err: any) {
       console.error(`Failed to unstage file:`, err);
-      notify("Unstage Failed", String(err), "error");
+      notify("Unstage Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -84,7 +80,7 @@ export const gitPresenter: GitActions = {
       notify("Added to .gitignore", "File will no longer show up as a change.", "success");
     } catch (err: any) {
       console.error("Failed to add to .gitignore:", err);
-      notify("Failed", String(err), "error");
+      notify("Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -111,7 +107,7 @@ export const gitPresenter: GitActions = {
       notify("Discarded Changes", `Discarded changes for ${fileName}`, "success");
     } catch (err: any) {
       console.error(`Failed to discard changes:`, err);
-      notify("Discard Failed", String(err), "error");
+      notify("Discard Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -136,7 +132,7 @@ export const gitPresenter: GitActions = {
       notify("Discard complete", "All unstaged changes have been discarded.", "success");
     } catch (err: any) {
       console.error("Failed to discard all changes:", err);
-      notify("Discard Failed", String(err), "error");
+      notify("Discard Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -157,7 +153,7 @@ export const gitPresenter: GitActions = {
       notify("Branch Switched", `Active branch is now: ${display}.${preserved}${restored}`, "success");
     } catch (err: any) {
       console.error("Failed to switch branch:", err);
-      notify("Checkout Failed", String(err), "error");
+      notify("Checkout Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -179,7 +175,7 @@ export const gitPresenter: GitActions = {
       );
     } catch (err: any) {
       console.error("Failed to create branch:", err);
-      notify("Creation Failed", String(err), "error");
+      notify("Creation Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -196,7 +192,7 @@ export const gitPresenter: GitActions = {
       notify("Branch Deleted", `Successfully deleted branch: ${branchName}`, "success");
     } catch (err: any) {
       console.error("Failed to delete branch:", err);
-      notify("Deletion Failed", String(err), "error");
+      notify("Deletion Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -210,7 +206,7 @@ export const gitPresenter: GitActions = {
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Merge Complete", String(result) || `Merged ${branchName} into current.`, "success");
     } catch (err: any) {
-      const errMsg = String(err);
+      const errMsg = errorMessage(err);
       if (errMsg.includes("conflict") || errMsg.includes("CONFLICT")) {
         notify("Merge Conflicts", "Merge conflicts detected. Resolve them and commit, or abort the merge.", "danger");
       } else {
@@ -229,7 +225,7 @@ export const gitPresenter: GitActions = {
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Rebase Complete", String(result) || `Rebased onto ${branchName}.`, "success");
     } catch (err: any) {
-      const errMsg = String(err);
+      const errMsg = errorMessage(err);
       if (errMsg.includes("conflict") || errMsg.includes("CONFLICT")) {
         notify("Rebase Conflicts", "Conflicts detected. Resolve them and continue, or abort rebase.", "danger");
       } else {
@@ -252,7 +248,7 @@ export const gitPresenter: GitActions = {
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Operation Aborted", "Aborted pending conflict operation.", "success");
     } catch (err: any) {
-      notify("Abort Failed", String(err), "error");
+      notify("Abort Failed", errorMessage(err), "error");
       throw err;
     }
   },
@@ -266,7 +262,7 @@ export const gitPresenter: GitActions = {
       useWorkspaceStore.getState().setFileTree(tree);
       notify("Undo Complete", "Move/rename has been undone.", "success");
     } catch (err: any) {
-      notify("Undo Failed", String(err), "error");
+      notify("Undo Failed", errorMessage(err), "error");
       throw err;
     }
   },

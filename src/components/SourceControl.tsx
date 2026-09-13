@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useWorkspaceStore } from "../store";
 import { invoke } from "@tauri-apps/api/core";
 import { gitPresenter } from "./git/GitPresenter";
+import { gitErrorMessage } from "./git/gitErrors";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
 import { buildUnstagedList } from "./sourceControl/sourceControlHelpers";
@@ -186,11 +187,7 @@ const SourceControl: React.FC = () => {
       await loadRepoData();
     } catch (err: any) {
       console.error("Failed to initialize git repository:", err);
-      // git_init now rejects with a structured GitError object (PR 5a), not
-      // a bare string -- `${err}` would print "[object Object]" for it.
-      // `?? err` keeps this correct for the remaining not-yet-converted
-      // commands' plain-string errors during the PR 5a migration window.
-      notify("Error", `Error initializing Git: ${err?.message ?? err}`, "error");
+      notify("Error", `Error initializing Git: ${gitErrorMessage(err)}`, "error");
     } finally {
       setInitLoading(false);
     }

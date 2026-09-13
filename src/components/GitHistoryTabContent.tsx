@@ -4,6 +4,7 @@ import { useWorkspaceStore } from "../store";
 import { RotateCcw, ArrowUp, ArrowDown, Copy, Check, GitCommit, GitBranch, Tag, User, Calendar, ExternalLink } from "lucide-react";
 import { notify } from "../notificationStore";
 import { useConfirm } from "./useConfirm";
+import { gitErrorMessage } from "./git/gitErrors";
 
 interface GitCommitInfo {
   hash: string;
@@ -99,7 +100,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Revert complete", "Commit reverted successfully.", "success");
     } catch (err: any) {
       console.error("Revert failed:", err);
-      notify("Revert failed", `Revert failed: ${err}`, "error");
+      notify("Revert failed", `Revert failed: ${gitErrorMessage(err)}`, "error");
     }
   };
 
@@ -121,7 +122,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Reset complete", "Branch reset successfully.", "success");
     } catch (err: any) {
       console.error("Reset failed:", err);
-      notify("Reset failed", `Reset failed: ${err}`, "error");
+      notify("Reset failed", `Reset failed: ${gitErrorMessage(err)}`, "error");
     }
   };
 
@@ -143,7 +144,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       setCommits(history);
     } catch (err: any) {
       console.error("Failed to load commit history:", err);
-      setError(String(err));
+      setError(gitErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -171,7 +172,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Push complete", "Successfully pushed commits to remote upstream.", "success");
     } catch (err: any) {
       console.error("Push failed:", err);
-      notify("Push failed", `Push failed: ${err}`, "error");
+      notify("Push failed", `Push failed: ${gitErrorMessage(err)}`, "error");
     } finally {
       setIsPushing(false);
     }
@@ -191,7 +192,7 @@ export const GitHistoryTabContent: React.FC<{ tab?: any }> = ({ tab }) => {
       notify("Pull complete", "Successfully pulled changes from remote.", "success");
     } catch (err: any) {
       console.error("Pull failed:", err);
-      notify("Pull failed", `Pull failed: ${err}`, "error");
+      notify("Pull failed", `Pull failed: ${gitErrorMessage(err)}`, "error");
     } finally {
       setIsPulling(false);
     }

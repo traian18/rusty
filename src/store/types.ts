@@ -401,7 +401,6 @@ export interface WorkspaceState {
   syncSubmodule: (repositoryId: string) => Promise<void>;
   lastRename: { originalPath: string; newPath: string } | null;
   setLastRename: (rename: { originalPath: string; newPath: string } | null) => void;
-  collapseAllTrigger?: number;
   expandedPaths: Record<string, boolean>;
   revealPath: string | null;
   selectedEdgeId: string | null;

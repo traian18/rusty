@@ -2,6 +2,7 @@ import { createEmptyCanvasContext } from "../canvasHelpers";
 import { tabsAfterBranchChange, tabsAfterWorkspaceChange } from "../../tabs/transitions";
 import { pruneForClosedTab } from "../../tabs/policy";
 import { disposeTab } from "../../tabs/effects";
+import { canonicalizeFilePath } from "../../tabs/identity";
 import type { WorkspaceSliceCreator } from "../sliceTypes";
 import type { WorkspaceState } from "../types";
 
@@ -99,11 +100,14 @@ export const createWorkspaceSlice: WorkspaceSliceCreator = (set, get) => ({
 
   collapseAllFolders: () => set({
     expandedPaths: {},
-    collapseAllTrigger: Date.now(),
   }),
 
   revealFileInTree: (filePath) => set((state) => {
-    const parts = filePath.split("/");
+    // canonicalizeFilePath already normalizes to forward slashes regardless
+    // of platform (REFACTOR_PLAN.md PR 7 commit 6 -- fixes a real bug: a
+    // bare `.split("/")` would never match a native Windows path here,
+    // silently expanding nothing).
+    const parts = canonicalizeFilePath(filePath).split("/");
     const expandedPaths = { ...state.expandedPaths };
     let currentPath = "";
     for (let index = 0; index < parts.length - 1; index++) {

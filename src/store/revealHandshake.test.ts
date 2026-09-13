@@ -81,4 +81,19 @@ describe("revealFileInTree: the drawer-open handshake", () => {
     expect(store.getState().drawerOpen).toBe(true);
     expect(store.getState().drawerView).toBe("explorer");
   });
+
+  // REFACTOR_PLAN.md PR 7 commit 6: a bare `.split("/")` never matched a
+  // native Windows path here, silently expanding no ancestor at all.
+  it("expands every ancestor directory of a native Windows path", () => {
+    const store = createRevealHandshakeTestStore();
+
+    store.getState().revealFileInTree("C:\\src\\components\\shell\\AppShell.tsx");
+
+    expect(store.getState().expandedPaths).toEqual({
+      "C:": true,
+      "C:/src": true,
+      "C:/src/components": true,
+      "C:/src/components/shell": true,
+    });
+  });
 });
